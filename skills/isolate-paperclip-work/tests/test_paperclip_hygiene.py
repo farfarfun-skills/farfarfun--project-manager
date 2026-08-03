@@ -1273,25 +1273,17 @@ class PaperclipHygieneCheckerTests(unittest.TestCase):
             self.assertTrue(result["closed"])
             self.assertEqual(["docs/payment-policy.md"], result["delivery"]["changed_paths"])
 
-<<<<<<< HEAD
     def test_attested_peer_owns_preexisting_dirty_path_after_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             initialize_repository(workspace)
             (workspace / "src").mkdir()
             (workspace / "src/checkout.py").write_text("ENABLED = True\n", encoding="utf-8")
-=======
-    def test_large_attested_path_set_batches_ownership_and_git_scans(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
-            initialize_repository(workspace)
->>>>>>> 68c5fd74a7310c4630d513d2b40e96b301a7d354
             selected = create_session(
                 workspace, "payment-policy", ["docs/payment-policy.md"], PASS_COMMAND,
                 expected_outputs=["docs/payment-policy.md"], started_at=FIXED_TIME,
             )
             peer = create_session(
-<<<<<<< HEAD
                 workspace, "checkout-policy", ["src/checkout.py"], PASS_COMMAND,
                 expected_outputs=["src/checkout.py"], started_at=FIXED_TIME + timedelta(seconds=1),
             )
@@ -1306,7 +1298,19 @@ class PaperclipHygieneCheckerTests(unittest.TestCase):
             )
             (selected / "todo.md").write_text("# Process TODO\n\n- [x] Done.\n", encoding="utf-8")
 
-=======
+            result = close_session(workspace, selected.name)
+            self.assertTrue(result["closed"])
+            self.assertEqual(["docs/payment-policy.md"], result["delivery"]["changed_paths"])
+
+    def test_large_attested_path_set_batches_ownership_and_git_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            selected = create_session(
+                workspace, "payment-policy", ["docs/payment-policy.md"], PASS_COMMAND,
+                expected_outputs=["docs/payment-policy.md"], started_at=FIXED_TIME,
+            )
+            peer = create_session(
                 workspace, "generated-reports", ["src/generated/**"], PASS_COMMAND,
                 started_at=FIXED_TIME + timedelta(seconds=1),
             )
@@ -1355,13 +1359,10 @@ class PaperclipHygieneCheckerTests(unittest.TestCase):
             self.assertLessEqual(fingerprint_paths.call_count, 2)
 
             (selected / "todo.md").write_text("# Process TODO\n\n- [x] Done.\n", encoding="utf-8")
->>>>>>> 68c5fd74a7310c4630d513d2b40e96b301a7d354
             result = close_session(workspace, selected.name)
             self.assertTrue(result["closed"])
             self.assertEqual(["docs/payment-policy.md"], result["delivery"]["changed_paths"])
 
-<<<<<<< HEAD
-=======
     def test_large_committed_path_set_batches_active_peer_baseline_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -1454,7 +1455,6 @@ class PaperclipHygieneCheckerTests(unittest.TestCase):
 
             self.assertEqual(singles, batched)
 
->>>>>>> 68c5fd74a7310c4630d513d2b40e96b301a7d354
     def test_attested_peer_can_own_path_forbidden_only_by_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

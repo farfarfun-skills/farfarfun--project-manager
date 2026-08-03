@@ -897,17 +897,10 @@ def effective_changed_paths(
     committed = committed_paths_since(workspace, baseline_head)
     attested_paths: set[str] = set()
     if selected_session_key:
-<<<<<<< HEAD
-        attested_paths = {
-            relative for relative in committed
-            if committed_ownership_claims_path(workspace, selected_session_key, context, relative)
-        }
-        committed -= attested_paths
-=======
-        committed -= committed_ownership_claimed_paths(
+        attested_paths = committed_ownership_claimed_paths(
             workspace, selected_session_key, context, committed,
         )
->>>>>>> 68c5fd74a7310c4630d513d2b40e96b301a7d354
+        committed -= attested_paths
     effective = set(committed)
     for relative in set(current_status) | set(baseline):
         current = {
