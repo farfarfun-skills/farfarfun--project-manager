@@ -78,10 +78,12 @@ Report should contain:
 
 ## Naming Rules
 
+- fixed design source: `assets/design-source.fig` (excluded from ordinary asset naming checks)
 - screenshots: `page-{page-name}-{state}.png`
 - multi-platform screenshots: `page-{page-name}-{state}-{platform}.png`
 - exports: `asset-{name}.{ext}`
 - annotation images: `annot-{page-name}-{topic}.png`
+- other files under `assets/`: `asset-{name}.{ext}` or `annot-{page-name}-{topic}.png`
 
 ## Known Limits
 

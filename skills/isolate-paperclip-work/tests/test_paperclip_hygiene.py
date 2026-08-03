@@ -21,7 +21,9 @@ from scripts.paperclip_session import (
     contract_digest,
     create_session,
     migrate_legacy_context,
+    migrate_verification_command_cwds,
     purge_session,
+    run_verification_commands,
     validate_slug,
 )
 
@@ -337,6 +339,54 @@ class PaperclipSessionTests(unittest.TestCase):
             initialize_repository(workspace)
             with self.assertRaisesRegex(ValueError, "verification command"):
                 create_session(workspace, "payment-timeout", ["src/payment"], [])
+
+    def test_verification_cwd_migration_preserves_argv_and_runs_from_application(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            app = workspace / "apps/client"
+            app.mkdir(parents=True)
+            (app / "marker.txt").write_text("ok\n", encoding="utf-8")
+            command = [sys.executable, "-c", "from pathlib import Path; assert Path('marker.txt').is_file()"]
+            session = create_session(
+                workspace,
+                "client-verification",
+                ["apps/client/marker.txt"],
+                [command],
+                expected_outputs=["apps/client/marker.txt"],
+                retention="external-archive",
+                started_at=FIXED_TIME,
+            )
+
+            migrated = migrate_verification_command_cwds(workspace, session.name, ["apps/client"])
+            context = json.loads((session / "context.json").read_text(encoding="utf-8"))
+            self.assertTrue(migrated["migrated"])
+            self.assertEqual(command, context["verification_commands"][0]["args"])
+            self.assertEqual("apps/client", context["verification_commands"][0]["cwd"])
+            self.assertEqual(context["contract_digest"], contract_digest(context))
+            self.assertTrue((session / "scratch/verification-cwd-migration-backup.json").is_file())
+            result = run_verification_commands(workspace, context["verification_commands"], 30)
+            self.assertEqual("passed", result[0]["status"])
+            self.assertEqual("apps/client", result[0]["cwd"])
+            (session / "todo.md").write_text("# Process TODO\n\n- [x] Done.\n", encoding="utf-8")
+            closed = close_session(workspace, session.name, archive_ref="audit://records/client-verification")
+            self.assertTrue(closed["closed"])
+            self.assertEqual("allow", closed["decision"])
+
+    def test_verification_cwd_migration_rejects_invalid_or_repeated_contract_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                migrate_verification_command_cwds(workspace, session.name, [])
+            with self.assertRaisesRegex(ValueError, "existing local directory"):
+                migrate_verification_command_cwds(workspace, session.name, ["apps/missing"])
+            (workspace / "apps/client").mkdir(parents=True)
+            migrate_verification_command_cwds(workspace, session.name, ["apps/client"])
+            with self.assertRaisesRegex(ValueError, "already been applied"):
+                migrate_verification_command_cwds(workspace, session.name, ["apps/client"])
 
     def test_cli_create_and_close_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1210,6 +1260,35 @@ class PaperclipHygieneCheckerTests(unittest.TestCase):
             (workspace / "src").mkdir()
             (workspace / "docs/payment-policy.md").write_text("# Payment\n", encoding="utf-8")
             (workspace / "src/checkout.py").write_text("ENABLED = True\n", encoding="utf-8")
+            git(workspace, "add", "docs/payment-policy.md", "src/checkout.py")
+            git(workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "add policies")
+            revision = git(workspace, "rev-parse", "HEAD").stdout.strip()
+
+            attest_committed_paths(
+                workspace, selected.name, revision, ["src/checkout.py"], owner_session_key=peer.name,
+            )
+            (selected / "todo.md").write_text("# Process TODO\n\n- [x] Done.\n", encoding="utf-8")
+
+            result = close_session(workspace, selected.name)
+            self.assertTrue(result["closed"])
+            self.assertEqual(["docs/payment-policy.md"], result["delivery"]["changed_paths"])
+
+    def test_attested_peer_owns_preexisting_dirty_path_after_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            (workspace / "src").mkdir()
+            (workspace / "src/checkout.py").write_text("ENABLED = True\n", encoding="utf-8")
+            selected = create_session(
+                workspace, "payment-policy", ["docs/payment-policy.md"], PASS_COMMAND,
+                expected_outputs=["docs/payment-policy.md"], started_at=FIXED_TIME,
+            )
+            peer = create_session(
+                workspace, "checkout-policy", ["src/checkout.py"], PASS_COMMAND,
+                expected_outputs=["src/checkout.py"], started_at=FIXED_TIME + timedelta(seconds=1),
+            )
+            (workspace / "docs").mkdir()
+            (workspace / "docs/payment-policy.md").write_text("# Payment\n", encoding="utf-8")
             git(workspace, "add", "docs/payment-policy.md", "src/checkout.py")
             git(workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "add policies")
             revision = git(workspace, "rev-parse", "HEAD").stdout.strip()

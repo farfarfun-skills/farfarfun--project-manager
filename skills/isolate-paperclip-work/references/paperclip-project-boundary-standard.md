@@ -92,7 +92,7 @@ session key 使用 UTC 时间戳和领域 slug：`YYYYMMDDTHHMMSSZ-{domain-slug}
 | `allowed_paths` | agent 可以修改的最小相对路径或 glob；不得使用 `.`、`*` 或 `**` 放行全仓 |
 | `forbidden_paths` | 即使属于 allowed 父目录也禁止修改的路径；优先级高于 allowed |
 | `expected_outputs` | 关闭时必须存在的具体项目路径，不接受 glob |
-| `verification_commands` | 至少一条参数数组；不经过 shell 执行，不得在参数中放密钥 |
+| `verification_commands` | 至少一条参数数组；不经过 shell 执行，不得在参数中放密钥。兼容旧数组；需要非根工作目录时使用 `{ "args": [...], "cwd": "apps/client" }`，`cwd` 必须是存在、非符号链接、仓库相对的具体目录 |
 | `baseline_head` | session 创建时的 HEAD |
 | `baseline_changes` | 创建前已有脏路径的状态和内容指纹 |
 | `overlapping_session_keys` | 创建时仍活跃的 peer session key 列表；用于并发归属、关闭与清理门禁，空列表也必须显式记录 |
@@ -103,6 +103,8 @@ session key 使用 UTC 时间戳和领域 slug：`YYYYMMDDTHHMMSSZ-{domain-slug}
 若新版本工具需要回滚，先停止该 workspace 的 create/close/purge 操作，再运行同一命令并追加 `--rollback`。工具只会恢复 digest 有效、确实缺少该字段的迁移前备份；恢复后旧工具可继续读取，当前工具会再次要求迁移。确认迁移稳定并成功关闭 session 前不得删除备份；session 按 retention 正常清理时，备份随过程区一同删除。
 
 检查器比较 baseline HEAD、后续 commit、暂存区和工作区。创建前未变化的用户改动不计入 agent 范围；agent 对这些文件的覆盖、回退、暂存或提交仍视为新变更。执行期间不得修改范围、baseline、验证命令或其摘要；需要扩展范围时关闭或放弃原 session，并用新契约创建 session。多个 session 并存时必须显式传入当前 `--session`；只有当 peer session 的签名契约声明该路径，且该路径在 peer 自身 baseline 之后变化，或该路径是 peer 的具体 `expected_outputs` 且 baseline 指纹与当前内容一致时，才能从当前 session 的越界集合剔除。当前 session 的 allowed 或 forbidden 路径与 peer 重叠时不允许 peer 代为认领；契约损坏或缺失的 peer 也不得作为归属证据。
+
+既有 monorepo session 若验证命令 argv 正确但必须从应用目录运行，不得手工编辑 `context.json`、PATH wrapper 或临时根配置。使用 `paperclip_session.py migrate-verification-cwd --workspace <workspace> --session <session-key> --verification-cwd <relative-dir>`；每条验证命令各传一次。工具只接受存在的本地仓库相对目录，原 argv 保持不变，将旧 digest 与 argv 写入 session `scratch/verification-cwd-migration-backup.json`，再原子写入带 `cwd` 的命令对象并重算 digest。迁移后重新执行 hygiene 检查和原验证命令。
 
 task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与相似度检测，不得写入 `context.json`。task/agent 引用可以作为不透明值集中存放，但不得进入正式项目资产。
 

@@ -239,11 +239,18 @@ def validate_delivery(session: Path, context: dict, findings: list[dict[str, str
     if not isinstance(delivery, dict) or not delivery_digest_is_valid(delivery):
         findings.append(finding("block", "delivery.digest", relative, "The delivery record digest does not match.", "Regenerate it with paperclip_session.py close."))
         return
-    if len(verification) != len(commands) or any(
+    expected_verification = [
+        {"command": command["args"], "cwd": command["cwd"]}
+        if isinstance(command, dict)
+        else {"command": command, "cwd": "."}
+        for command in commands
+    ]
+    if len(verification) != len(expected_verification) or any(
         not isinstance(item, dict)
         or item.get("status") != "passed"
-        or item.get("command") != commands[index]
-        for index, item in enumerate(verification)
+        or item.get("command") != expected["command"]
+        or item.get("cwd") != expected["cwd"]
+        for item, expected in zip(verification, expected_verification, strict=True)
     ):
         findings.append(finding("block", "delivery.verification", relative, "The delivery record does not prove that every verification command passed.", "Run every declared verification command successfully."))
     outputs = delivery.get("expected_outputs", []) if isinstance(delivery, dict) else []

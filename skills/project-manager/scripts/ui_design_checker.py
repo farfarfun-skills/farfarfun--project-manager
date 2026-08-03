@@ -16,6 +16,7 @@ PLACEHOLDER_VALUES = {"", "-", "—", "/", "待补充", "todo", "tbd", "n/a"}
 SCREENSHOT_NAME_RE = re.compile(r"^page-[a-z0-9-]+-[a-z0-9-]+(?:-[a-z0-9-]+)?\.(png|jpg|jpeg|webp)$")
 ASSET_NAME_RE = re.compile(r"^asset-[a-z0-9-]+\.[a-z0-9]+$")
 ANNOT_NAME_RE = re.compile(r"^annot-[a-z0-9-]+-[a-z0-9-]+\.(png|jpg|jpeg|webp)$")
+DESIGN_SOURCE_NAME = "design-source.fig"
 
 
 @dataclass
@@ -224,7 +225,11 @@ def analyze_ui_design(markdown: str, ui_doc_path: Path) -> dict:
             passes.append(f"{folder.name} 目录存在")
 
     if assets_dir.exists():
-        invalid_assets = [item.name for item in list_files(assets_dir) if not (ASSET_NAME_RE.match(item.name) or ANNOT_NAME_RE.match(item.name))]
+        invalid_assets = [
+            item.name
+            for item in list_files(assets_dir)
+            if item.name != DESIGN_SOURCE_NAME and not (ASSET_NAME_RE.match(item.name) or ANNOT_NAME_RE.match(item.name))
+        ]
         if invalid_assets:
             findings.append(make_finding("low", "assets.naming", "资源文件命名不符合规范", f"不合规文件：{', '.join(invalid_assets)}。", "图标与位图使用 `asset-{name}.{ext}`，标注图使用 `annot-{page-name}-{topic}.png`。"))
 

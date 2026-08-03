@@ -22,6 +22,7 @@ PROHIBITED_SLUG_PARTS = {"agent", "paperclip", "session", "task", "temp", "tempo
 PROCESS_RELATIVE = Path(".run/paperclip")
 LIFECYCLE_LOCK_NAME = ".lifecycle.lock"
 LEGACY_CONTEXT_BACKUP = "overlap-migration-backup.json"
+VERIFICATION_CWD_MIGRATION_BACKUP = "verification-cwd-migration-backup.json"
 COMMITTED_OWNERSHIP_FILE = "committed-path-ownership.json"
 SESSION_DIRECTORIES = ("notes", "screens", "logs", "scratch")
 BROAD_CONTRACT_PATHS = {".", "*", "**", "./**"}
@@ -74,10 +75,23 @@ def path_matches_contract(relative: str, patterns: list[str]) -> bool:
     return False
 
 
-def validate_verification_commands(commands: list[list[str]]) -> list[list[str]]:
+def normalize_verification_cwd(value: str) -> str:
+    return normalize_contract_path(value, "verification command cwd", allow_globs=False)
+
+
+def validate_verification_commands(commands: list) -> list:
     normalized = []
     for command in commands:
-        if not command or not all(isinstance(part, str) and part for part in command):
+        if isinstance(command, list):
+            args = command
+        elif isinstance(command, dict):
+            if set(command) != {"args", "cwd"} or not isinstance(command.get("cwd"), str):
+                raise ValueError("verification command objects require exactly args and cwd")
+            args = command.get("args")
+            command = {"args": args, "cwd": normalize_verification_cwd(command["cwd"])}
+        else:
+            raise ValueError("verification commands must be argument arrays or args/cwd objects")
+        if not isinstance(args, list) or not args or not all(isinstance(part, str) and part for part in args):
             raise ValueError("verification commands must be non-empty argument arrays")
         normalized.append(command)
     if not normalized:
@@ -664,17 +678,23 @@ def effective_changed_paths(
         raise ValueError("session context does not contain a valid Git baseline")
     current_status = git_status_entries(workspace)
     committed = committed_paths_since(workspace, baseline_head)
+    attested_paths: set[str] = set()
     if selected_session_key:
-        committed = {
+        attested_paths = {
             relative for relative in committed
-            if not committed_ownership_claims_path(workspace, selected_session_key, context, relative)
+            if committed_ownership_claims_path(workspace, selected_session_key, context, relative)
         }
+        committed -= attested_paths
     effective = set(committed)
     for relative in set(current_status) | set(baseline):
         current = {
             "status": current_status.get(relative, "  "),
             "fingerprint": fingerprint_workspace_path(workspace, relative),
         }
+        # A clean worktree path changed by an attested commit belongs to its
+        # peer owner, even when this session captured an earlier dirty baseline.
+        if relative in attested_paths and relative not in current_status:
+            continue
         if relative not in baseline or current != baseline[relative]:
             effective.add(relative)
     managed_gitignore = context.get("managed_gitignore_fingerprint")
@@ -1138,21 +1158,83 @@ def migrate_legacy_context(
         return _migrate_legacy_context_unlocked(workspace, session_key, rollback=rollback)
 
 
-def run_verification_commands(workspace: Path, commands: list[list[str]], timeout: int) -> list[dict]:
+def migrate_verification_command_cwds(
+    workspace: Path,
+    session_key: str,
+    cwds: list[str],
+) -> dict:
+    """Atomically attach validated working directories without changing argv."""
+    workspace = workspace.resolve()
+    with workspace_lifecycle_lock(workspace):
+        session = session_path(workspace, session_key)
+        context_path = session / "context.json"
+        context = load_context(session)
+        if context.get("schema_version") != 2 or context.get("status") != "active":
+            raise ValueError("verification cwd migration requires an active version 2 session")
+        if not contract_digest_is_valid(context):
+            raise ValueError("refusing to migrate a context with a mismatched contract digest")
+        commands = validate_verification_commands(context.get("verification_commands", []))
+        if len(commands) != len(cwds):
+            raise ValueError("provide exactly one --verification-cwd for every verification command")
+        normalized_cwds = [normalize_verification_cwd(value) for value in cwds]
+        for relative in normalized_cwds:
+            target = workspace / relative
+            if not target.is_dir() or target.is_symlink():
+                raise ValueError(f"verification command cwd must be an existing local directory: {relative}")
+        if any(isinstance(command, dict) for command in commands):
+            raise ValueError("verification command cwd migration has already been applied")
+
+        backup_path = session / "scratch" / VERIFICATION_CWD_MIGRATION_BACKUP
+        backup = {
+            "schema_version": 1,
+            "legacy_contract_digest": context["contract_digest"],
+            "verification_commands": commands,
+        }
+        if backup_path.exists():
+            try:
+                existing_backup = json.loads(backup_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"unable to read verification cwd migration backup: {exc}") from exc
+            if existing_backup != backup:
+                raise ValueError("verification cwd migration backup does not match this contract")
+        else:
+            write_context(backup_path, backup)
+
+        context["verification_commands"] = [
+            {"args": command, "cwd": cwd}
+            for command, cwd in zip(commands, normalized_cwds, strict=True)
+        ]
+        context["contract_digest"] = contract_digest(context)
+        write_context(context_path, context)
+        return {
+            "session": session_key,
+            "migrated": True,
+            "verification_command_cwds": normalized_cwds,
+        }
+
+
+def run_verification_commands(workspace: Path, commands: list, timeout: int) -> list[dict]:
     results = []
     for command in commands:
+        if isinstance(command, dict):
+            args = command["args"]
+            cwd = workspace / command["cwd"]
+        else:
+            args = command
+            cwd = workspace
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                command,
-                cwd=workspace,
+                args,
+                cwd=cwd,
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=timeout,
             )
             result = {
-                "command": command,
+                "command": args,
+                "cwd": str(cwd.relative_to(workspace)) if cwd != workspace else ".",
                 "exit_code": completed.returncode,
                 "duration_ms": round((time.monotonic() - started) * 1000),
                 "status": "passed" if completed.returncode == 0 else "failed",
@@ -1412,6 +1494,19 @@ def main() -> int:
     migrate.add_argument("--session", required=True)
     migrate.add_argument("--rollback", action="store_true", help="Restore the validated pre-migration context")
 
+    migrate_cwd = subparsers.add_parser(
+        "migrate-verification-cwd",
+        help="Attach validated per-command working directories to an active version 2 session",
+    )
+    migrate_cwd.add_argument("--workspace", required=True)
+    migrate_cwd.add_argument("--session", required=True)
+    migrate_cwd.add_argument(
+        "--verification-cwd",
+        action="append",
+        required=True,
+        help="Repository-relative local directory; repeat once for every verification command",
+    )
+
     attest = subparsers.add_parser("attest-commit", help="Move committed paths to their verified owner without changing session scope")
     attest.add_argument("--workspace", required=True)
     attest.add_argument("--session", required=True, help="Source session currently charged for the paths")
@@ -1449,6 +1544,12 @@ def main() -> int:
             return 0 if result["closed"] else 1
         if args.command == "migrate":
             result = migrate_legacy_context(Path(args.workspace), args.session, rollback=args.rollback)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "migrate-verification-cwd":
+            result = migrate_verification_command_cwds(
+                Path(args.workspace), args.session, args.verification_cwd,
+            )
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.command == "attest-commit":
