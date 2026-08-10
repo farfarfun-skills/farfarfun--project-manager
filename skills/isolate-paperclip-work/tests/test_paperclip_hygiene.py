@@ -18,11 +18,14 @@ from scripts.paperclip_hygiene_checker import analyze, validate_allow_paths
 from scripts.paperclip_session import (
     attest_committed_paths,
     close_session,
+    complete_board_approval_action,
     contract_digest,
     create_session,
     migrate_legacy_context,
     migrate_verification_command_cwds,
     purge_session,
+    request_board_approval,
+    resolve_board_approval,
     run_verification_commands,
     validate_slug,
 )
@@ -84,7 +87,7 @@ class PaperclipSessionTests(unittest.TestCase):
 
             self.assertEqual("20260715T103000Z-payment-timeout", session.name)
             self.assertEqual(
-                {"context.json", "todo.md", "handoff.md", "evidence.md", "notes", "screens", "logs", "scratch"},
+                {"context.json", "todo.md", "handoff.md", "evidence.md", "board-approvals.json", "notes", "screens", "logs", "scratch"},
                 {path.name for path in session.iterdir()},
             )
             context = json.loads((session / "context.json").read_text(encoding="utf-8"))
@@ -95,6 +98,126 @@ class PaperclipSessionTests(unittest.TestCase):
             self.assertNotIn("task_title", context)
             self.assertIn("/.run/paperclip/", (workspace / ".gitignore").read_text(encoding="utf-8"))
             self.assertEqual("allow", analyze(workspace, selected_session=session.name)["decision"])
+
+    def test_board_approval_blocks_close_until_agent_executes_approved_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+            (session / "todo.md").write_text("# Process TODO\n\n- [x] Done.\n", encoding="utf-8")
+
+            request = request_board_approval(
+                workspace,
+                session.name,
+                "production-rollout",
+                "Whether to deploy release 2.4.0 to production",
+                "The organization authority matrix assigns this release decision to the board.",
+                [
+                    {"id": "proceed", "label": "Deploy release 2.4.0"},
+                    {"id": "hold", "label": "Keep the current production version"},
+                ],
+                "proceed",
+                ["Production traffic will move to release 2.4.0."],
+                ["Agent deploys and smoke-checks proceed, or records hold without deploying."],
+                requested_at=FIXED_TIME,
+            )
+            self.assertEqual("blocked", request["execution_status"])
+
+            pending = close_session(workspace, session.name)
+            self.assertFalse(pending["closed"])
+            self.assertIn("board_approval.pending", {item["code"] for item in pending["findings"]})
+
+            approved = resolve_board_approval(
+                workspace,
+                session.name,
+                "production-rollout",
+                "approved",
+                "approval-842",
+                selected_option="proceed",
+                resolved_at=FIXED_TIME + timedelta(minutes=1),
+            )
+            self.assertEqual("pending", approved["execution_status"])
+
+            not_executed = close_session(workspace, session.name)
+            self.assertFalse(not_executed["closed"])
+            self.assertIn(
+                "board_approval.execution_pending",
+                {item["code"] for item in not_executed["findings"]},
+            )
+
+            complete_board_approval_action(
+                workspace,
+                session.name,
+                "production-rollout",
+                "release-record:2.4.0 smoke=passed",
+                executed_at=FIXED_TIME + timedelta(minutes=2),
+            )
+            closed = close_session(workspace, session.name)
+            self.assertTrue(closed["closed"])
+            self.assertEqual("completed", closed["delivery"]["board_approvals"][0]["execution_status"])
+
+    def test_rejected_board_approval_requires_no_board_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+            (session / "todo.md").write_text("# Process TODO\n\n- [x] cancelled: board rejected rollout.\n", encoding="utf-8")
+            request_board_approval(
+                workspace,
+                session.name,
+                "production-rollout",
+                "Whether to deploy release 2.4.0 to production",
+                "Board approval is required by the organization authority matrix.",
+                [{"id": "proceed", "label": "Deploy release 2.4.0"}],
+                "proceed",
+                ["Production would change."],
+                ["Agent deploys the approved release."],
+                requested_at=FIXED_TIME,
+            )
+
+            rejected = resolve_board_approval(
+                workspace,
+                session.name,
+                "production-rollout",
+                "rejected",
+                "approval-843",
+                resolution_note="Keep the current production version.",
+                resolved_at=FIXED_TIME + timedelta(minutes=1),
+            )
+
+            self.assertEqual("not-required", rejected["execution_status"])
+            self.assertTrue(close_session(workspace, session.name)["closed"])
+
+    def test_cli_board_request_assigns_operations_to_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SESSION_SCRIPT),
+                    "request-approval",
+                    "--workspace", str(workspace),
+                    "--session", session.name,
+                    "--approval-id", "production-rollout",
+                    "--decision", "Whether to deploy release 2.4.0",
+                    "--rationale", "The authority matrix requires board approval.",
+                    "--option", "proceed=Deploy release 2.4.0",
+                    "--recommended-option", "proceed",
+                    "--impact", "Production will change.",
+                    "--agent-action", "Agent calls the deployment API.",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            payload = json.loads(completed.stdout)
+            self.assertEqual("pending", payload["approval"]["approval_status"])
+            self.assertIn("board_action", payload)
+            self.assertIn("agent performs every operational action", payload["board_action"])
 
     def test_legacy_v2_context_requires_migration_and_supports_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

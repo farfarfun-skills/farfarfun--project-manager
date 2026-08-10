@@ -24,6 +24,7 @@ LIFECYCLE_LOCK_NAME = ".lifecycle.lock"
 LEGACY_CONTEXT_BACKUP = "overlap-migration-backup.json"
 VERIFICATION_CWD_MIGRATION_BACKUP = "verification-cwd-migration-backup.json"
 COMMITTED_OWNERSHIP_FILE = "committed-path-ownership.json"
+BOARD_APPROVALS_FILE = "board-approvals.json"
 SESSION_DIRECTORIES = ("notes", "screens", "logs", "scratch")
 BROAD_CONTRACT_PATHS = {".", "*", "**", "./**"}
 CONTRACT_FIELDS = (
@@ -150,6 +151,13 @@ def parse_verification_command(value: str) -> list[str]:
     if not command:
         raise argparse.ArgumentTypeError("verification command must not be empty")
     return command
+
+
+def parse_approval_option(value: str) -> dict[str, str]:
+    option_id, separator, label = value.partition("=")
+    if not separator or not SLUG_RE.fullmatch(option_id) or not label.strip():
+        raise argparse.ArgumentTypeError("approval option must use id=label with a kebab-case id")
+    return {"id": option_id, "label": label.strip()}
 
 
 def git_command(workspace: Path, *args: str) -> subprocess.CompletedProcess[bytes] | None:
@@ -1135,6 +1143,10 @@ def _create_session_unlocked(
         "| --- | --- | --- | --- |\n",
         encoding="utf-8",
     )
+    (session / BOARD_APPROVALS_FILE).write_text(
+        json.dumps({"schema_version": 1, "approvals": []}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return session
 
 
@@ -1198,6 +1210,263 @@ def write_context(path: Path, context: dict) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def validate_board_approvals(ledger: object) -> dict:
+    if not isinstance(ledger, dict) or set(ledger) != {"schema_version", "approvals"}:
+        raise ValueError("board approval ledger requires exactly schema_version and approvals")
+    if ledger["schema_version"] != 1 or not isinstance(ledger["approvals"], list):
+        raise ValueError("board approval ledger must use schema version 1 and an approvals array")
+
+    fields = {
+        "id", "decision", "rationale", "options", "recommended_option", "impacts",
+        "agent_actions", "requested_at", "approval_status", "approval_ref",
+        "selected_option", "resolved_at", "resolution_note", "execution_status",
+        "executed_at", "execution_evidence",
+    }
+    seen_ids: set[str] = set()
+    for index, approval in enumerate(ledger["approvals"]):
+        prefix = f"approvals[{index}]"
+        if not isinstance(approval, dict) or set(approval) != fields:
+            raise ValueError(f"{prefix} has an invalid field set")
+        approval_id = approval["id"]
+        if not isinstance(approval_id, str) or not SLUG_RE.fullmatch(approval_id):
+            raise ValueError(f"{prefix}.id must use lowercase kebab-case")
+        if approval_id in seen_ids:
+            raise ValueError(f"duplicate board approval id: {approval_id}")
+        seen_ids.add(approval_id)
+        for field in ("decision", "rationale", "requested_at"):
+            if not isinstance(approval[field], str) or not approval[field].strip():
+                raise ValueError(f"{prefix}.{field} must be a non-empty string")
+
+        options = approval["options"]
+        if not isinstance(options, list) or not options:
+            raise ValueError(f"{prefix}.options must contain at least one concrete option")
+        option_ids = []
+        for option in options:
+            if (
+                not isinstance(option, dict)
+                or set(option) != {"id", "label"}
+                or not isinstance(option["id"], str)
+                or not SLUG_RE.fullmatch(option["id"])
+                or not isinstance(option["label"], str)
+                or not option["label"].strip()
+            ):
+                raise ValueError(f"{prefix}.options contains an invalid option")
+            option_ids.append(option["id"])
+        if len(option_ids) != len(set(option_ids)):
+            raise ValueError(f"{prefix}.options contains duplicate ids")
+        if approval["recommended_option"] not in option_ids:
+            raise ValueError(f"{prefix}.recommended_option must reference a listed option")
+        for field in ("impacts", "agent_actions"):
+            values = approval[field]
+            if not isinstance(values, list) or not values or not all(
+                isinstance(value, str) and value.strip() for value in values
+            ):
+                raise ValueError(f"{prefix}.{field} must contain concrete non-empty items")
+
+        status = approval["approval_status"]
+        execution = approval["execution_status"]
+        if status == "pending":
+            if any(approval[field] is not None for field in ("approval_ref", "selected_option", "resolved_at")):
+                raise ValueError(f"{prefix} pending approval contains resolution data")
+            if execution != "blocked" or approval["executed_at"] is not None or approval["execution_evidence"] is not None:
+                raise ValueError(f"{prefix} pending approval must keep agent execution blocked")
+        elif status == "approved":
+            if not isinstance(approval["approval_ref"], str) or not approval["approval_ref"].strip():
+                raise ValueError(f"{prefix}.approval_ref is required after approval")
+            if approval["selected_option"] not in option_ids or not isinstance(approval["resolved_at"], str):
+                raise ValueError(f"{prefix} approved resolution is incomplete")
+            if execution not in {"pending", "completed"}:
+                raise ValueError(f"{prefix} approved execution must be pending or completed")
+            if execution == "pending" and any(
+                approval[field] is not None for field in ("executed_at", "execution_evidence")
+            ):
+                raise ValueError(f"{prefix} pending execution contains completion data")
+            if execution == "completed" and not all(
+                isinstance(approval[field], str) and approval[field].strip()
+                for field in ("executed_at", "execution_evidence")
+            ):
+                raise ValueError(f"{prefix} completed execution requires time and evidence")
+        elif status == "rejected":
+            if (
+                not isinstance(approval["approval_ref"], str)
+                or not approval["approval_ref"].strip()
+                or approval["selected_option"] is not None
+                or not isinstance(approval["resolved_at"], str)
+                or execution != "not-required"
+                or approval["executed_at"] is not None
+                or approval["execution_evidence"] is not None
+            ):
+                raise ValueError(f"{prefix} rejected resolution is inconsistent")
+        else:
+            raise ValueError(f"{prefix}.approval_status is invalid")
+        if approval["resolution_note"] is not None and not isinstance(approval["resolution_note"], str):
+            raise ValueError(f"{prefix}.resolution_note must be a string or null")
+    return ledger
+
+
+def load_board_approvals(session: Path) -> dict:
+    path = session / BOARD_APPROVALS_FILE
+    if not path.exists():
+        return {"schema_version": 1, "approvals": []}
+    try:
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unable to read board approval ledger: {exc}") from exc
+    return validate_board_approvals(ledger)
+
+
+def board_approval_findings(workspace: Path, session: Path, phase: str) -> list[dict[str, str]]:
+    path = session / BOARD_APPROVALS_FILE
+    relative = str(path.relative_to(workspace))
+    try:
+        approvals = load_board_approvals(session)["approvals"]
+    except ValueError as exc:
+        return [{
+            "severity": "block",
+            "code": "board_approval.invalid",
+            "path": relative,
+            "message": str(exc),
+            "repair": "Restore the agent-managed approval ledger with paperclip_session.py.",
+        }]
+    if phase != "close":
+        return []
+    findings = []
+    for approval in approvals:
+        if approval["approval_status"] == "pending":
+            findings.append({
+                "severity": "block",
+                "code": "board_approval.pending",
+                "path": relative,
+                "message": f"Board approval `{approval['id']}` is still pending.",
+                "repair": "Submit the concrete request for board approval and let the agent record the decision.",
+            })
+        elif approval["approval_status"] == "approved" and approval["execution_status"] != "completed":
+            findings.append({
+                "severity": "block",
+                "code": "board_approval.execution_pending",
+                "path": relative,
+                "message": f"Board approval `{approval['id']}` passed, but the agent actions are incomplete.",
+                "repair": "Have the agent perform the approved actions and record completion evidence.",
+            })
+    return findings
+
+
+def _active_approval_session(workspace: Path, session_key: str) -> Path:
+    session = session_path(workspace, session_key)
+    context = load_context(session)
+    if not contract_digest_is_valid(context) or context.get("status") != "active":
+        raise ValueError("board approvals require an active session with a valid contract")
+    return session
+
+
+def request_board_approval(
+    workspace: Path,
+    session_key: str,
+    approval_id: str,
+    decision: str,
+    rationale: str,
+    options: list[dict[str, str]],
+    recommended_option: str,
+    impacts: list[str],
+    agent_actions: list[str],
+    requested_at: datetime | None = None,
+) -> dict:
+    workspace = workspace.resolve()
+    with workspace_lifecycle_lock(workspace):
+        session = _active_approval_session(workspace, session_key)
+        ledger = load_board_approvals(session)
+        approval = {
+            "id": approval_id,
+            "decision": decision.strip(),
+            "rationale": rationale.strip(),
+            "options": options,
+            "recommended_option": recommended_option,
+            "impacts": list(dict.fromkeys(value.strip() for value in impacts if value.strip())),
+            "agent_actions": list(dict.fromkeys(value.strip() for value in agent_actions if value.strip())),
+            "requested_at": normalize_time(requested_at).isoformat().replace("+00:00", "Z"),
+            "approval_status": "pending",
+            "approval_ref": None,
+            "selected_option": None,
+            "resolved_at": None,
+            "resolution_note": None,
+            "execution_status": "blocked",
+            "executed_at": None,
+            "execution_evidence": None,
+        }
+        ledger["approvals"].append(approval)
+        validate_board_approvals(ledger)
+        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        return approval
+
+
+def resolve_board_approval(
+    workspace: Path,
+    session_key: str,
+    approval_id: str,
+    status: str,
+    approval_ref: str,
+    selected_option: str | None = None,
+    resolution_note: str | None = None,
+    resolved_at: datetime | None = None,
+) -> dict:
+    workspace = workspace.resolve()
+    with workspace_lifecycle_lock(workspace):
+        session = _active_approval_session(workspace, session_key)
+        ledger = load_board_approvals(session)
+        approval = next((item for item in ledger["approvals"] if item["id"] == approval_id), None)
+        if approval is None:
+            raise ValueError(f"board approval does not exist: {approval_id}")
+        if approval["approval_status"] != "pending":
+            raise ValueError("only a pending board approval can be resolved")
+        if status not in {"approved", "rejected"}:
+            raise ValueError("board approval status must be approved or rejected")
+        if not isinstance(approval_ref, str) or not approval_ref.strip():
+            raise ValueError("board approval requires a non-empty Paperclip approval reference")
+        if status == "approved" and selected_option is None:
+            raise ValueError("approved board decisions require --selected-option")
+        if status == "rejected" and selected_option is not None:
+            raise ValueError("rejected board decisions must not select an option")
+        approval.update({
+            "approval_status": status,
+            "approval_ref": approval_ref.strip(),
+            "selected_option": selected_option,
+            "resolved_at": normalize_time(resolved_at).isoformat().replace("+00:00", "Z"),
+            "resolution_note": resolution_note.strip() if resolution_note else None,
+            "execution_status": "pending" if status == "approved" else "not-required",
+        })
+        validate_board_approvals(ledger)
+        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        return approval
+
+
+def complete_board_approval_action(
+    workspace: Path,
+    session_key: str,
+    approval_id: str,
+    evidence: str,
+    executed_at: datetime | None = None,
+) -> dict:
+    workspace = workspace.resolve()
+    with workspace_lifecycle_lock(workspace):
+        session = _active_approval_session(workspace, session_key)
+        ledger = load_board_approvals(session)
+        approval = next((item for item in ledger["approvals"] if item["id"] == approval_id), None)
+        if approval is None:
+            raise ValueError(f"board approval does not exist: {approval_id}")
+        if approval["approval_status"] != "approved" or approval["execution_status"] != "pending":
+            raise ValueError("only an approved board decision with pending agent actions can be completed")
+        if not evidence.strip():
+            raise ValueError("agent execution evidence must not be empty")
+        approval.update({
+            "execution_status": "completed",
+            "executed_at": normalize_time(executed_at).isoformat().replace("+00:00", "Z"),
+            "execution_evidence": evidence.strip(),
+        })
+        validate_board_approvals(ledger)
+        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        return approval
 
 
 def legacy_session_interval(session: Path, context: dict) -> tuple[datetime, datetime | None] | None:
@@ -1492,6 +1761,16 @@ def _close_session_unlocked(
     if context.get("retention") == "external-archive" and not archive_ref:
         raise ValueError("--archive-ref is required for external-archive retention")
 
+    approval_findings = board_approval_findings(workspace, session, "close")
+    if approval_findings:
+        return {
+            "closed": False,
+            "purged": False,
+            "decision": "block",
+            "findings": approval_findings,
+        }
+    approval_ledger = load_board_approvals(session)
+
     todo_path = session / "todo.md"
     todo_text = todo_path.read_text(encoding="utf-8", errors="replace") if todo_path.is_file() else ""
     if re.search(r"^\s*[-*]\s+\[\s\]", todo_text, re.MULTILINE):
@@ -1551,6 +1830,17 @@ def _close_session_unlocked(
         "changed_paths": effective_changed_paths(workspace, context, session_key),
         "expected_outputs": output_results,
         "verification": verification,
+        "board_approvals": [
+            {
+                "id": approval["id"],
+                "approval_status": approval["approval_status"],
+                "approval_ref": approval["approval_ref"],
+                "selected_option": approval["selected_option"],
+                "execution_status": approval["execution_status"],
+                "execution_evidence": approval["execution_evidence"],
+            }
+            for approval in approval_ledger["approvals"]
+        ],
     }
     delivery["owned_path_fingerprints"] = {
         relative: fingerprint_workspace_path(workspace, relative)
@@ -1695,6 +1985,32 @@ def main() -> int:
     create.add_argument("--retention", choices=["discard", "external-archive"], default="discard")
     create.add_argument("--at", type=parse_time, help="Optional ISO-8601 start time; defaults to current UTC")
 
+    request_approval = subparsers.add_parser("request-approval", help="Create a concrete board approval request")
+    request_approval.add_argument("--workspace", required=True)
+    request_approval.add_argument("--session", required=True)
+    request_approval.add_argument("--approval-id", required=True, help="Stable kebab-case decision id")
+    request_approval.add_argument("--decision", required=True, help="Exact decision the board is approving")
+    request_approval.add_argument("--rationale", required=True, help="Why board authority is required")
+    request_approval.add_argument("--option", action="append", required=True, type=parse_approval_option, help="id=label; repeatable")
+    request_approval.add_argument("--recommended-option", required=True)
+    request_approval.add_argument("--impact", action="append", required=True, help="Concrete impact; repeatable")
+    request_approval.add_argument("--agent-action", action="append", required=True, help="Action the agent performs after approval; repeatable")
+
+    resolve_approval = subparsers.add_parser("resolve-approval", help="Record a board decision returned by Paperclip")
+    resolve_approval.add_argument("--workspace", required=True)
+    resolve_approval.add_argument("--session", required=True)
+    resolve_approval.add_argument("--approval-id", required=True)
+    resolve_approval.add_argument("--status", choices=["approved", "rejected"], required=True)
+    resolve_approval.add_argument("--approval-ref", required=True, help="Opaque Paperclip approval reference")
+    resolve_approval.add_argument("--selected-option", help="Required when approved; omitted when rejected")
+    resolve_approval.add_argument("--resolution-note")
+
+    complete_approval = subparsers.add_parser("complete-approval", help="Record the agent's approved follow-up actions")
+    complete_approval.add_argument("--workspace", required=True)
+    complete_approval.add_argument("--session", required=True)
+    complete_approval.add_argument("--approval-id", required=True)
+    complete_approval.add_argument("--evidence", required=True, help="Project-owned result reference or repeatable verification")
+
     close = subparsers.add_parser("close", help="Verify, audit, and close a session")
     close.add_argument("--workspace", required=True)
     close.add_argument("--session", required=True)
@@ -1749,6 +2065,31 @@ def main() -> int:
                 started_at=args.at,
             )
             print(session)
+            return 0
+        if args.command == "request-approval":
+            approval = request_board_approval(
+                Path(args.workspace), args.session, args.approval_id, args.decision,
+                args.rationale, args.option, args.recommended_option, args.impact,
+                args.agent_action,
+            )
+            print(json.dumps({
+                "approval": approval,
+                "board_action": "Approve or reject one listed option in Paperclip only; the agent performs every operational action after approval.",
+            }, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "resolve-approval":
+            approval = resolve_board_approval(
+                Path(args.workspace), args.session, args.approval_id, args.status,
+                args.approval_ref, selected_option=args.selected_option,
+                resolution_note=args.resolution_note,
+            )
+            print(json.dumps(approval, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "complete-approval":
+            approval = complete_board_approval_action(
+                Path(args.workspace), args.session, args.approval_id, args.evidence,
+            )
+            print(json.dumps(approval, ensure_ascii=False, indent=2))
             return 0
         if args.command == "close":
             result = close_session(

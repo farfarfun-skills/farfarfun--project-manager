@@ -1,6 +1,6 @@
 ---
 name: isolate-paperclip-work
-description: Keep Paperclip task, agent, prompt, run, and assignment context separate from durable project assets while enforcing Git change scope, project-owned naming, verification, delivery evidence, and local process cleanup. Use whenever an agent works on a software project from inside Paperclip, declares files it may change, creates intermediate TODOs or screenshots, names files or code from a task, hands work to another agent, scans changed or staged files, closes a run, or audits a repository for Paperclip-to-project coupling.
+description: Keep Paperclip task, agent, prompt, run, assignment, and board-approval context separate from durable project assets while enforcing Git change scope, project-owned naming, verification, approval gates, agent-owned follow-up operations, delivery evidence, and local process cleanup. Use whenever an agent works on a software project from inside Paperclip, declares files it may change, encounters a decision requiring board participation, creates intermediate TODOs or screenshots, names files or code from a task, hands work to another agent, scans changed or staged files, closes a run, or audits a repository for Paperclip-to-project coupling.
 ---
 
 # Isolate Paperclip Work
@@ -16,7 +16,7 @@ Classify every artifact before writing it:
 | Class | Location | Allowed content |
 | --- | --- | --- |
 | Durable project asset | Repository-owned canonical path | Stable product facts, domain concepts, engineering decisions, implementation, and verification |
-| Paperclip process artifact | `.run/paperclip/sessions/<session-key>/` | Opaque task and agent references, execution TODOs, handoffs, screenshots, logs, notes, and scratch output |
+| Paperclip process artifact | `.run/paperclip/sessions/<session-key>/` | Opaque task, agent, and approval references; execution TODOs, handoffs, screenshots, logs, notes, and scratch output |
 | Intentional Paperclip integration | Explicit product-owned path | Code or documentation whose actual product domain integrates with Paperclip, excluding the current run's metadata |
 
 Do not put Paperclip task titles, task IDs, task URLs, agent names or IDs, prompts, assignment state, retry history, or run status in project documentation, source code, tests, configuration, migrations, assets, release notes, branches, or code identifiers. Do not name any durable file, directory, symbol, module, test, or migration after a task title or task reference.
@@ -50,6 +50,44 @@ Keep all execution-only material inside the current session:
 - Record cross-agent state in `handoff.md`; include the current state, evidence paths, next action, and risks, but no credentials or copied prompt.
 - Put screenshots in `screens/`, use the required sequence/type/surface name, index them in `evidence.md`, and redact secrets and personal data.
 - Put exploratory notes, logs, and disposable output in `notes/`, `logs/`, and `scratch/`. Never import, link, or depend on these paths from project assets.
+
+## Gate Board Decisions
+
+Use the organization's authority matrix or explicit project policy to decide whether the board must participate. Do not invent board scope. When a decision requires the board, stop before any dependent external or mutating action and create one concrete approval:
+
+```bash
+python3 scripts/paperclip_session.py request-approval \
+  --workspace /path/to/repo \
+  --session 20260715T103000Z-payment-timeout \
+  --approval-id production-rollout \
+  --decision 'Whether to deploy release 2.4.0 to production' \
+  --rationale 'The organization authority matrix assigns this decision to the board' \
+  --option 'proceed=Deploy release 2.4.0' \
+  --option 'hold=Keep the current production version' \
+  --recommended-option proceed \
+  --impact 'Production traffic will move to release 2.4.0' \
+  --agent-action 'Agent applies the selected option: deploys and smoke-checks proceed, or records hold without deploying'
+```
+
+Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option. Never ask the board to call an API, run a command, upload a file, edit the repository, deploy a release, or collect evidence.
+
+After Paperclip returns the board decision, the agent records it. For approval, the agent then performs every declared action and records completion evidence:
+
+```bash
+python3 scripts/paperclip_session.py resolve-approval \
+  --workspace /path/to/repo --session <session-key> \
+  --approval-id production-rollout --status approved \
+  --selected-option proceed --approval-ref '<opaque-approval-ref>'
+
+# Agent performs the approved API, upload, deployment, or repository work here.
+
+python3 scripts/paperclip_session.py complete-approval \
+  --workspace /path/to/repo --session <session-key> \
+  --approval-id production-rollout \
+  --evidence 'release-record:2.4.0 smoke=passed'
+```
+
+For rejection, record `--status rejected` without `--selected-option`, cancel the dependent TODOs, and do not perform the actions. Pending approvals and approved-but-incomplete agent actions block closure. Read the approval contract in [paperclip-project-boundary-standard.md](references/paperclip-project-boundary-standard.md) before requesting or resolving an approval.
 
 During work, attribute the Git diff to the current session and pass task identity only at runtime:
 
@@ -100,7 +138,7 @@ python3 scripts/paperclip_session.py close \
   --session 20260715T103000Z-payment-timeout
 ```
 
-The close command verifies expected outputs, runs every declared command, generates `delivery.json`, enforces scope and leakage gates, and marks the session closed. It automatically deletes `retention: discard` sessions. For `external-archive`, pass `--archive-ref` during close and delete the closed local session with `paperclip_session.py purge` after confirming the external record.
+The close command blocks unresolved board approvals first, then verifies expected outputs, runs every declared command, generates `delivery.json`, enforces scope and leakage gates, and marks the session closed. It automatically deletes `retention: discard` sessions. For `external-archive`, pass `--archive-ref` during close and delete the closed local session with `paperclip_session.py purge` after confirming the external record.
 
 Use close's repeatable `--integration-path`, or the checker's `--allow-path`, only for verified product-owned Paperclip integrations. Never allow an entire repository or a generic parent such as `src`, `docs`, or `tests`.
 

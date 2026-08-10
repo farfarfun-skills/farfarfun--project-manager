@@ -68,6 +68,7 @@ Git 提交信息仅允许一项平台级归属例外：独立一行且完整等�
         ├── todo.md
         ├── handoff.md
         ├── evidence.md
+        ├── board-approvals.json # agent 管理的董事会审批账本
         ├── delivery.json       # close 时生成
         ├── notes/
         ├── screens/
@@ -135,7 +136,43 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 
 不得复制完整 prompt、密钥、认证头、个人数据或大段日志。正式交付文档不得链接 `handoff.md`。
 
-### 4.3 截图与证据
+### 4.3 董事会审批
+
+以组织授权矩阵、公司章程或项目明确规则判断董事会是否有决策权；不得由 agent 擅自扩大董事会范围。若规则明确要求董事会参与，或重大事项的权限归属无法确认，agent 必须先停止依赖该决定的外部或变更操作，再提交具体审批。
+
+`board-approvals.json` 由 agent 通过 `paperclip_session.py` 管理。董事会不编辑该文件，也不调用 API、运行命令、上传文件、修改代码、部署、发布或采集证据。董事会只在 Paperclip 审批机制中批准一个明确选项或拒绝请求；审批结果返回后，agent 记录决议并自行完成全部操作。
+
+每项审批必须包含：
+
+| 字段 | 规则 |
+| --- | --- |
+| `id` | 当前 session 内唯一的稳定 kebab-case 决策标识 |
+| `decision` | 董事会正在批准的单一、具体决定，不能写“请给意见” |
+| `rationale` | 为什么该决定属于董事会权限 |
+| `options` | 有限且互斥的具体选项；不得把执行步骤包装成董事会任务 |
+| `recommended_option` | agent 基于现有证据推荐的一个已列选项 |
+| `impacts` | 每个决定涉及的业务、资金、法律、运营或风险影响 |
+| `agent_actions` | 获批后由 agent 执行的 API、上传、文件、部署、通知或验证动作；存在多个选项时必须覆盖每个选项的对应动作 |
+| `approval_ref` | Paperclip 返回的不透明审批引用，不保存 token 或认证信息 |
+| `execution_evidence` | agent 完成获批动作后的项目记录或可重复验证引用 |
+
+审批状态机固定为：
+
+```text
+pending / execution blocked
+  ├── rejected / execution not-required
+  └── approved / execution pending
+                    └── agent completes actions / execution completed
+```
+
+- `pending`：不得执行任何依赖该决定的动作。
+- `approved`：董事会职责已经结束；agent 按 `selected_option` 执行全部 `agent_actions`。
+- `rejected`：agent 不执行相关动作，并把依赖 TODO 标记为 `cancelled:` 及原因。
+- `completed`：只能由 agent 在实际执行后登记，并提供最小可验证证据。
+
+不得用聊天中的模糊同意、文件上传、API 调用结果或 agent 自己的判断冒充董事会审批。不得要求董事会为了证明批准而执行操作。未决审批、无 Paperclip 审批引用的决议、批准后未完成的 agent 动作或损坏的审批账本均阻断关闭。
+
+### 4.4 截图与证据
 
 截图只放在 `screens/`，使用：
 
@@ -147,7 +184,7 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 
 每张截图必须在 `evidence.md` 中登记文件、目的、采集时间和脱敏状态。采集前隐藏或裁剪 token、cookie、邮箱、手机号、真实用户数据、内部 URL 参数和无关桌面内容。不得把 Paperclip 控制台截图当作产品证据写入正式设计或测试文档。
 
-### 4.4 Notes、Logs 与 Scratch
+### 4.5 Notes、Logs 与 Scratch
 
 - `notes/`：保存短期调查记录；文件名使用三位序号和主题 slug，例如 `001-timeout-observation.md`。
 - `logs/`：只保存与当前验证直接相关的最小日志片段；先脱敏，避免整库或无限追加。
@@ -155,11 +192,11 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 
 过程脚本若需要成为项目能力，必须重写、测试并迁入项目正式脚本目录；不得直接移动 scratch 文件冒充正式实现。
 
-### 4.5 Delivery
+### 4.6 Delivery
 
 `paperclip_session.py close` 生成带摘要校验的 `delivery.json`，只记录变更路径、预期输出存在性、验证命令参数、退出状态、耗时和关闭结论，不保存命令输出、prompt 或推理内容。
 
-关闭门禁要求：全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。
+关闭门禁要求：全部董事会审批已解决，获批动作已由 agent 完成并记录证据；全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。
 
 ## 5. 生命周期
 
@@ -174,15 +211,17 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 ### 执行
 
 1. 正式改动直接进入项目规范路径，只表达项目事实。
-2. TODO、handoff、截图、日志、探索笔记和临时输出留在 session。
-3. 从过程区提升内容时重新表述并重新验证，不复制过程元数据。
-4. 不在正式资产中建立到 session 的依赖或链接。
-5. 使用 `--scan changed` 检查当前 session；提交前使用 `--scan staged` 检查 index 内容。
+2. 遇到董事会权限事项时，先登记具体审批并通过 Paperclip 提交；获批前不执行依赖动作。
+3. 董事会批准后由 agent 调用接口、上传文件、修改项目、部署并验证；拒绝后取消依赖动作。
+4. TODO、handoff、审批、截图、日志、探索笔记和临时输出留在 session。
+5. 从过程区提升内容时重新表述并重新验证，不复制过程元数据。
+6. 不在正式资产中建立到 session 的依赖或链接。
+7. 使用 `--scan changed` 检查当前 session；提交前使用 `--scan staged` 检查 index 内容。
 
 ### 收尾
 
 1. 检查文件名、代码标识符、文档内容、分支/提交信息和 diff。
-2. 完成或明确取消全部 TODO，补齐必要证据索引。
+2. 确认董事会审批均已解决，获批动作均由 agent 完成，再完成或明确取消全部 TODO 并补齐必要证据索引。
 3. 使用 `paperclip_session.py close` 执行输出、验证、范围和泄漏门禁并生成 `delivery.json`。
 4. `discard` 在成功关闭后自动删除；`external-archive` 提供授权归档引用后关闭，再使用 `purge` 删除本地 session。
 5. 关闭失败时修复问题并重试；不得用 `purge --force` 冒充成功交付。
@@ -194,6 +233,6 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 | --- | --- |
 | `allow` | 范围、输出和验证契约满足；正式资产无 Paperclip 执行上下文；过程区隔离、忽略且结构合规 |
 | `revise` | task 标题相似命名、过程区结构、截图索引、TODO 或其他可修复收尾问题 |
-| `block` | 越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
+| `block` | 未决董事会审批、获批后 agent 动作未完成、审批账本损坏、越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
 
 自动检查不能判断一个看似正常的领域名是否实际由 task 标题机械转写。最终交付前必须人工回答：即使删除 Paperclip 中的 task，这个名称和文档是否仍然是项目自然、长期可维护的一部分？

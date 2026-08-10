@@ -7,8 +7,10 @@ from pathlib import Path, PurePosixPath
 
 try:
     from .paperclip_session import (
+        BOARD_APPROVALS_FILE,
         PROCESS_RELATIVE,
         SESSION_KEY_RE,
+        board_approval_findings,
         contract_digest_is_valid,
         delivery_digest_is_valid,
         effective_changed_paths,
@@ -23,8 +25,10 @@ try:
     )
 except ImportError:  # Support direct execution from the skill directory.
     from paperclip_session import (
+        BOARD_APPROVALS_FILE,
         PROCESS_RELATIVE,
         SESSION_KEY_RE,
+        board_approval_findings,
         contract_digest_is_valid,
         delivery_digest_is_valid,
         effective_changed_paths,
@@ -67,7 +71,7 @@ IGNORED_WALK_DIRS = {
     "__pycache__", "build", "coverage", "dist", "node_modules", "target", "vendor", "venv",
 }
 REQUIRED_SESSION_FILES = {"context.json", "todo.md", "handoff.md", "evidence.md"}
-OPTIONAL_SESSION_FILES = {"delivery.json", "committed-path-ownership.json"}
+OPTIONAL_SESSION_FILES = {"delivery.json", "committed-path-ownership.json", BOARD_APPROVALS_FILE}
 ALLOWED_SESSION_DIRS = {"notes", "screens", "logs", "scratch"}
 ALLOWED_PROCESS_ROOT_DIRECTORIES = {"sessions", "checkouts"}
 FORBIDDEN_CONTEXT_KEYS = {
@@ -414,6 +418,16 @@ def check_process_area(
         inspect_phase = session.name == selected_session if selected_session else len(session_paths) == 1
         if inspect_phase:
             changed_paths.extend(check_scope(workspace, session, context, phase, findings, passes))
+            approval_path = session / BOARD_APPROVALS_FILE
+            if approval_path.exists():
+                approval_issues = board_approval_findings(workspace, session, phase)
+                findings.extend(approval_issues)
+                if not approval_issues:
+                    passes.append(
+                        "Board approval ledger is valid"
+                        if phase == "work"
+                        else "Board approvals are resolved and approved actions are agent-executed"
+                    )
         todo_path = session / "todo.md"
         if phase == "close" and inspect_phase and todo_path.is_file():
             todo_text = todo_path.read_text(encoding="utf-8", errors="replace")
@@ -457,7 +471,7 @@ def check_process_area(
 
     if not selected_session and len(session_paths) > 1:
         findings.append(finding("revise", "scope.session_required", PROCESS_RELATIVE.as_posix(), "Multiple sessions exist, so changes cannot be attributed safely.", "Pass --session for the current agent session."))
-    if not any(item["code"].startswith(("process.", "session.", "context.", "todo.", "notes.", "screens.")) for item in findings):
+    if not any(item["code"].startswith(("process.", "session.", "context.", "board_approval.", "todo.", "notes.", "screens.")) for item in findings):
         passes.append("Paperclip process sessions follow the isolated layout")
     return references, contexts, sorted(set(changed_paths))
 
@@ -618,6 +632,7 @@ def analyze(
         "manual_checks": [
             "Confirm that durable names describe stable domain concepts rather than a task title, even when similarity detection passes.",
             "Confirm that promoted documentation states project facts and cites a canonical project source, not Paperclip execution narration.",
+            "Confirm that every board-governed decision used a concrete approval and that the agent, not the board, performed post-approval API, upload, or execution work.",
         ],
     }
 

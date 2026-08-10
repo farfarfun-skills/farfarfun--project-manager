@@ -1,4 +1,4 @@
 interface:
   display_name: "Paperclip Project Hygiene"
-  short_description: "Isolate task context and enforce agent change scope"
-  default_prompt: "Use $isolate-paperclip-work to isolate Paperclip context, constrain Git changes, verify delivery, and clean up the local session."
+  short_description: "Isolate task context and gate board approvals"
+  default_prompt: "Use $isolate-paperclip-work to isolate Paperclip context, constrain Git changes, request concrete board approvals, let the agent perform approved operations, verify delivery, and clean up the local session."
