@@ -1,2 +1,6 @@
 2026-08-10 14:19:52.817 |WARNING | nltbuild.core.empty_build : empty_build:  18 | nltbuild | - 未识别到版本清单 (pyproject.toml / package.json / VERSION / script/__version__.md), 回退到 EmptyBuild: upgrade、tag、build 将不会有任何效果
 2026-08-10 14:19:52.819 |INFO    | nltbuild.core.base : base:  98 | nltbuild | - farfarfun--project-manager push
+2026-08-10 14:19:54.597 |ERROR   | nltbuild.core.util : util:  69 | nltbuild | - aicommits commit failed: Command '['aicommits', '--yes']' returned non-zero exit status 1.
+2026-08-10 14:19:54.597 |INFO    | nltbuild.core.util : util:  70 | nltbuild | - fallback to default commit message: add
+2026-08-10 14:35:59.094 |WARNING | nltbuild.core.empty_build : empty_build:  18 | nltbuild | - 未识别到版本清单 (pyproject.toml / package.json / VERSION / script/__version__.md), 回退到 EmptyBuild: upgrade、tag、build 将不会有任何效果
+2026-08-10 14:35:59.096 |INFO    | nltbuild.core.base : base:  98 | nltbuild | - farfarfun--project-manager push
