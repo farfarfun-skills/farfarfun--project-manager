@@ -71,3 +71,8 @@ jobs:
                       errors.append(f"{source}: missing {target}")
           assert not errors, "\n".join(errors)
           PY
+      - name: Run repository structure self-check
+        run: >-
+          python skills/project-structure-governance/scripts/project_structure_checker.py
+          --workspace .
+          --fail-on revise

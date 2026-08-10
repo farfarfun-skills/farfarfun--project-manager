@@ -5,6 +5,63 @@ from pathlib import Path
 
 NUMBERED_MARKDOWN_RE = re.compile(r"^(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
 SECTION_RE = re.compile(r"^##\s+.+?\s*$", re.MULTILINE)
+NAMED_SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+NAMED_SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def find_docs_root(path: Path) -> Path | None:
+    for parent in [path.parent, *path.parents]:
+        if parent.name == "docs":
+            return parent
+    return None
+
+
+def _split_headings(markdown: str, pattern: re.Pattern[str]) -> dict[str, str]:
+    matches = list(pattern.finditer(markdown))
+    sections: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections[match.group(1).strip()] = markdown[start:end].strip()
+    return sections
+
+
+def split_sections(markdown: str) -> dict[str, str]:
+    return _split_headings(markdown, NAMED_SECTION_RE)
+
+
+def split_subsections(markdown: str) -> dict[str, str]:
+    return _split_headings(markdown, NAMED_SUBSECTION_RE)
+
+
+def extract_bullet_value(section_body: str, label: str) -> str:
+    pattern = re.compile(rf"^[ \t]*-[ \t]*{re.escape(label)}[ \t]*[:：][ \t]*(.*)$", re.MULTILINE)
+    match = pattern.search(section_body)
+    return match.group(1).strip() if match else ""
+
+
+def extract_table_rows(section_body: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in section_body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if cells and not all(set(cell) <= {"-"} for cell in cells):
+            rows.append(cells)
+    return rows[1:] if len(rows) > 1 else []
+
+
+def extract_list_items(section_body: str) -> list[str]:
+    return [
+        normalize_text(line.split(" ", 1)[1])
+        for line in section_body.splitlines()
+        if re.match(r"^\s*-\s+.+$", line)
+    ]
 
 
 def numbered_markdown_files(path: Path) -> list[Path]:

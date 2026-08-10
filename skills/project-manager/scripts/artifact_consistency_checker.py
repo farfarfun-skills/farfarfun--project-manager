@@ -6,9 +6,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from .document_bundle import document_slug, read_document
+    from .document_bundle import (
+        document_slug,
+        extract_bullet_value,
+        find_docs_root,
+        normalize_text,
+        read_document,
+        split_sections,
+    )
 except ImportError:  # Support direct execution from the skill directory.
-    from document_bundle import document_slug, read_document
+    from document_bundle import (
+        document_slug,
+        extract_bullet_value,
+        find_docs_root,
+        normalize_text,
+        read_document,
+        split_sections,
+    )
 
 
 PLACEHOLDER_VALUES = {"", "-", "—", "/", "待补充", "todo", "tbd", "n/a"}
@@ -25,10 +39,6 @@ class Finding:
     advice: str
 
 
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
 def is_placeholder(value: str) -> bool:
     return normalize_text(value).strip("`").lower() in PLACEHOLDER_VALUES
 
@@ -37,31 +47,8 @@ def read_text(path: Path) -> str:
     return read_document(path)
 
 
-def extract_bullet_value(section_body: str, label: str) -> str:
-    pattern = re.compile(rf"^[ \t]*-[ \t]*{re.escape(label)}[ \t]*[:：][ \t]*(.*)$", re.MULTILINE)
-    match = pattern.search(section_body)
-    return match.group(1).strip() if match else ""
-
-
-def split_sections(markdown: str) -> dict[str, str]:
-    matches = list(re.finditer(r"^##\s+(.+?)\s*$", markdown, re.MULTILINE))
-    sections: dict[str, str] = {}
-    for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(markdown)
-        sections[match.group(1).strip()] = markdown[start:end].strip()
-    return sections
-
-
 def make_finding(severity: str, code: str, title: str, detail: str, advice: str) -> Finding:
     return Finding(severity=severity, code=code, title=title, detail=detail, advice=advice)
-
-
-def find_docs_root(path: Path) -> Path | None:
-    for parent in [path.parent, *path.parents]:
-        if parent.name == "docs":
-            return parent
-    return None
 
 
 def derive_output_path(feature_doc: Path) -> Path:

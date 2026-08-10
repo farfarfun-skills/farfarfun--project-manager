@@ -1,0 +1,2 @@
+2026-08-10 14:19:52.817 |WARNING | nltbuild.core.empty_build : empty_build:  18 | nltbuild | - 未识别到版本清单 (pyproject.toml / package.json / VERSION / script/__version__.md), 回退到 EmptyBuild: upgrade、tag、build 将不会有任何效果
+2026-08-10 14:19:52.819 |INFO    | nltbuild.core.base : base:  98 | nltbuild | - farfarfun--project-manager push

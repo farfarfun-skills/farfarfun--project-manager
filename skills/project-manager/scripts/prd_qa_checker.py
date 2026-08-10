@@ -6,13 +6,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from .document_bundle import document_slug, read_document
+    from .document_bundle import (
+        document_slug,
+        extract_bullet_value,
+        extract_list_items,
+        extract_table_rows,
+        find_docs_root,
+        normalize_text,
+        read_document,
+        split_sections,
+        split_subsections,
+    )
 except ImportError:  # Support direct execution from the skill directory.
-    from document_bundle import document_slug, read_document
+    from document_bundle import (
+        document_slug,
+        extract_bullet_value,
+        extract_list_items,
+        extract_table_rows,
+        find_docs_root,
+        normalize_text,
+        read_document,
+        split_sections,
+        split_subsections,
+    )
 
 
-SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
 PLACEHOLDER_VALUES = {"", "-", "—", "/", "待补充", "todo", "tbd", "n/a"}
 
 
@@ -25,19 +43,8 @@ class Finding:
     advice: str
 
 
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
 def read_text(path: Path) -> str:
     return read_document(path)
-
-
-def find_docs_root(path: Path) -> Path | None:
-    for parent in [path.parent, *path.parents]:
-        if parent.name == "docs":
-            return parent
-    return None
 
 
 def derive_output_path(prd_path: Path) -> Path:
@@ -47,66 +54,13 @@ def derive_output_path(prd_path: Path) -> Path:
     return docs_root / "review" / "prd-qa" / f"{document_slug(prd_path)}.prd-qa.generated.md"
 
 
-def split_sections(markdown: str) -> dict[str, str]:
-    matches = list(SECTION_RE.finditer(markdown))
-    sections: dict[str, str] = {}
-    for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(markdown)
-        sections[match.group(1).strip()] = markdown[start:end].strip()
-    return sections
-
-
-def split_subsections(section_body: str) -> dict[str, str]:
-    matches = list(SUBSECTION_RE.finditer(section_body))
-    if not matches:
-        return {}
-    sections: dict[str, str] = {}
-    for idx, match in enumerate(matches):
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(section_body)
-        sections[match.group(1).strip()] = section_body[start:end].strip()
-    return sections
-
-
 def is_placeholder(value: str) -> bool:
     clean = normalize_text(value).strip("`").lower()
     return clean in PLACEHOLDER_VALUES
 
 
-def extract_bullet_value(section_body: str, label: str) -> str:
-    pattern = re.compile(rf"^[ \t]*-[ \t]*{re.escape(label)}[ \t]*[:：][ \t]*(.*)$", re.MULTILINE)
-    match = pattern.search(section_body)
-    return match.group(1).strip() if match else ""
-
-
-def extract_table_rows(section_body: str) -> list[list[str]]:
-    rows: list[list[str]] = []
-    for line in section_body.splitlines():
-        striped = line.strip()
-        if not striped.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in striped.strip("|").split("|")]
-        if not cells:
-            continue
-        if all(set(cell) <= {"-"} for cell in cells):
-            continue
-        rows.append(cells)
-    if len(rows) <= 1:
-        return []
-    return rows[1:]
-
-
 def count_numbered_steps(section_body: str) -> int:
     return len(re.findall(r"^\s*\d+\.\s+.+$", section_body, re.MULTILINE))
-
-
-def extract_list_items(section_body: str) -> list[str]:
-    return [
-        normalize_text(line.split(" ", 1)[1])
-        for line in section_body.splitlines()
-        if re.match(r"^\s*-\s+.+$", line)
-    ]
 
 
 def make_finding(severity: str, code: str, title: str, detail: str, advice: str) -> Finding:
