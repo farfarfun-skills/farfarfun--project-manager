@@ -92,6 +92,8 @@ class PaperclipSessionTests(unittest.TestCase):
             )
             context = json.loads((session / "context.json").read_text(encoding="utf-8"))
             self.assertEqual(2, context["schema_version"])
+            approvals = json.loads((session / "board-approvals.json").read_text(encoding="utf-8"))
+            self.assertEqual(2, approvals["schema_version"])
             self.assertEqual(["src/payment/**", "docs/payment-timeout.md"], context["allowed_paths"])
             self.assertEqual(PASS_COMMAND, context["verification_commands"])
             self.assertIn("baseline_head", context)
@@ -109,16 +111,17 @@ class PaperclipSessionTests(unittest.TestCase):
             request = request_board_approval(
                 workspace,
                 session.name,
-                "production-rollout",
-                "Whether to deploy release 2.4.0 to production",
-                "The organization authority matrix assigns this release decision to the board.",
+                "account-id-migration",
+                "irreversible-production",
+                "Whether to run a one-way account ID migration in production",
+                "The migration permanently rewrites account identifiers and has no safe rollback.",
                 [
-                    {"id": "proceed", "label": "Deploy release 2.4.0"},
-                    {"id": "hold", "label": "Keep the current production version"},
+                    {"id": "proceed", "label": "Run the migration"},
+                    {"id": "hold", "label": "Keep the current identifiers"},
                 ],
                 "proceed",
-                ["Production traffic will move to release 2.4.0."],
-                ["Agent deploys and smoke-checks proceed, or records hold without deploying."],
+                ["Production identifiers will be permanently rewritten."],
+                ["Agent runs and verifies proceed, or records hold without changing production."],
                 requested_at=FIXED_TIME,
             )
             self.assertEqual("blocked", request["execution_status"])
@@ -130,7 +133,7 @@ class PaperclipSessionTests(unittest.TestCase):
             approved = resolve_board_approval(
                 workspace,
                 session.name,
-                "production-rollout",
+                "account-id-migration",
                 "approved",
                 "approval-842",
                 selected_option="proceed",
@@ -148,12 +151,16 @@ class PaperclipSessionTests(unittest.TestCase):
             complete_board_approval_action(
                 workspace,
                 session.name,
-                "production-rollout",
-                "release-record:2.4.0 smoke=passed",
+                "account-id-migration",
+                "migration-record:account-id verification=passed",
                 executed_at=FIXED_TIME + timedelta(minutes=2),
             )
             closed = close_session(workspace, session.name)
             self.assertTrue(closed["closed"])
+            self.assertEqual(
+                "irreversible-production",
+                closed["delivery"]["board_approvals"][0]["gate_category"],
+            )
             self.assertEqual("completed", closed["delivery"]["board_approvals"][0]["execution_status"])
 
     def test_rejected_board_approval_requires_no_board_operation(self) -> None:
@@ -166,6 +173,7 @@ class PaperclipSessionTests(unittest.TestCase):
                 workspace,
                 session.name,
                 "production-rollout",
+                "board-mandated",
                 "Whether to deploy release 2.4.0 to production",
                 "Board approval is required by the organization authority matrix.",
                 [{"id": "proceed", "label": "Deploy release 2.4.0"}],
@@ -201,13 +209,14 @@ class PaperclipSessionTests(unittest.TestCase):
                     "request-approval",
                     "--workspace", str(workspace),
                     "--session", session.name,
-                    "--approval-id", "production-rollout",
-                    "--decision", "Whether to deploy release 2.4.0",
-                    "--rationale", "The authority matrix requires board approval.",
-                    "--option", "proceed=Deploy release 2.4.0",
+                    "--approval-id", "account-id-migration",
+                    "--gate-category", "irreversible-production",
+                    "--decision", "Whether to run a one-way production migration",
+                    "--rationale", "The migration cannot be rolled back safely.",
+                    "--option", "proceed=Run the migration",
                     "--recommended-option", "proceed",
-                    "--impact", "Production will change.",
-                    "--agent-action", "Agent calls the deployment API.",
+                    "--impact", "Production identifiers will change permanently.",
+                    "--agent-action", "Agent runs and verifies the migration.",
                 ],
                 check=True,
                 capture_output=True,
@@ -216,8 +225,60 @@ class PaperclipSessionTests(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             self.assertEqual("pending", payload["approval"]["approval_status"])
+            self.assertEqual("irreversible-production", payload["approval"]["gate_category"])
             self.assertIn("board_action", payload)
             self.assertIn("agent performs every operational action", payload["board_action"])
+            self.assertIn("routine operations execute directly", payload["gate_policy"])
+
+    def test_board_approval_rejects_non_core_gate_category(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+
+            with self.assertRaisesRegex(ValueError, "reserved for a supported core gate"):
+                request_board_approval(
+                    workspace,
+                    session.name,
+                    "routine-upload",
+                    "routine-operation",
+                    "Whether to upload an ordinary build artifact",
+                    "The task mentions authorization.",
+                    [{"id": "upload", "label": "Upload the artifact"}],
+                    "upload",
+                    ["An artifact is uploaded to the configured destination."],
+                    ["Agent uploads and verifies the artifact."],
+                    requested_at=FIXED_TIME,
+                )
+
+    def test_legacy_board_approval_is_loaded_as_board_mandated_core_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+            request_board_approval(
+                workspace,
+                session.name,
+                "production-rollout",
+                "irreversible-production",
+                "Whether to perform an irreversible production migration",
+                "The migration cannot be rolled back safely.",
+                [{"id": "proceed", "label": "Run the migration"}],
+                "proceed",
+                ["Production data changes permanently."],
+                ["Agent runs and verifies the migration."],
+                requested_at=FIXED_TIME,
+            )
+            approval_path = session / "board-approvals.json"
+            legacy = json.loads(approval_path.read_text(encoding="utf-8"))
+            legacy["schema_version"] = 1
+            legacy["approvals"][0].pop("gate_category")
+            approval_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            migrated = paperclip_session.load_board_approvals(session)
+
+            self.assertEqual(2, migrated["schema_version"])
+            self.assertEqual("board-mandated", migrated["approvals"][0]["gate_category"])
 
     def test_legacy_v2_context_requires_migration_and_supports_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

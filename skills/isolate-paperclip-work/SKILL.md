@@ -1,6 +1,6 @@
 ---
 name: isolate-paperclip-work
-description: Keep Paperclip task, agent, prompt, run, assignment, and board-approval context separate from durable project assets while enforcing Git change scope, project-owned naming, verification, approval gates, agent-owned follow-up operations, delivery evidence, and local process cleanup. Use whenever an agent works on a software project from inside Paperclip, declares files it may change, encounters a decision requiring board participation, creates intermediate TODOs or screenshots, names files or code from a task, hands work to another agent, scans changed or staged files, closes a run, or audits a repository for Paperclip-to-project coupling.
+description: Keep Paperclip execution context separate from durable project assets, execute routine reversible operations without approval, route only core decision gates through concrete Paperclip board approvals, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, gate, or board decision, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
 ---
 
 # Isolate Paperclip Work
@@ -51,40 +51,54 @@ Keep all execution-only material inside the current session:
 - Put screenshots in `screens/`, use the required sequence/type/surface name, index them in `evidence.md`, and redact secrets and personal data.
 - Put exploratory notes, logs, and disposable output in `notes/`, `logs/`, and `scratch/`. Never import, link, or depend on these paths from project assets.
 
-## Gate Board Decisions
+## Minimize And Route Decision Gates
 
-Use the organization's authority matrix or explicit project policy to decide whether the board must participate. Do not invent board scope. When a decision requires the board, stop before any dependent external or mutating action and create one concrete approval:
+Default to execution. Do not create a gate merely because a task mentions approval or authorization, or because the agent must call an API, upload an artifact, edit an allowed file, run a command, retry work, or perform a routine deployment with a tested rollback. Execute these operations directly when they are within task scope, use existing authorized access, and have limited, recoverable impact.
+
+Create a decision gate only for one of these core categories:
+
+| Category | Use only when |
+| --- | --- |
+| `board-mandated` | The authority matrix or binding project policy explicitly assigns the decision to the board |
+| `material-commitment` | The decision creates a material legal, financial, or organization-wide strategic commitment |
+| `security-privacy` | The decision changes privileged access or materially changes sensitive-data disclosure, retention, or use |
+| `irreversible-production` | The production action is destructive or not safely reversible and has a material blast radius |
+
+If none applies, do not gate: the agent performs and verifies the operation. Scope violations, credential exposure, invalid process state, missing outputs, and failed verification are invariant failures that the agent must repair; they are not decisions the board can approve away.
+
+Every task that genuinely needs a decision gate must use a concrete Paperclip board approval. Do not use chat confirmation, a manual authorization step, a permission handoff, or any other substitute. Stop before the dependent action and create the approval:
 
 ```bash
 python3 scripts/paperclip_session.py request-approval \
   --workspace /path/to/repo \
   --session 20260715T103000Z-payment-timeout \
-  --approval-id production-rollout \
-  --decision 'Whether to deploy release 2.4.0 to production' \
-  --rationale 'The organization authority matrix assigns this decision to the board' \
-  --option 'proceed=Deploy release 2.4.0' \
-  --option 'hold=Keep the current production version' \
-  --recommended-option proceed \
-  --impact 'Production traffic will move to release 2.4.0' \
-  --agent-action 'Agent applies the selected option: deploys and smoke-checks proceed, or records hold without deploying'
+  --approval-id account-id-migration \
+  --gate-category irreversible-production \
+  --decision 'Whether to run the one-way account ID migration in production' \
+  --rationale 'The migration rewrites production identifiers and has no safe rollback' \
+  --option 'proceed=Run the migration' \
+  --option 'defer=Keep the current identifiers' \
+  --recommended-option defer \
+  --impact 'Proceed permanently rewrites production account identifiers' \
+  --agent-action 'Agent applies the selected option, verifies the result, and records evidence'
 ```
 
-Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option. Never ask the board to call an API, run a command, upload a file, edit the repository, deploy a release, or collect evidence.
+Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option there. Never ask the board to authorize manually, grant access, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, or collect evidence.
 
 After Paperclip returns the board decision, the agent records it. For approval, the agent then performs every declared action and records completion evidence:
 
 ```bash
 python3 scripts/paperclip_session.py resolve-approval \
   --workspace /path/to/repo --session <session-key> \
-  --approval-id production-rollout --status approved \
+  --approval-id account-id-migration --status approved \
   --selected-option proceed --approval-ref '<opaque-approval-ref>'
 
 # Agent performs the approved API, upload, deployment, or repository work here.
 
 python3 scripts/paperclip_session.py complete-approval \
   --workspace /path/to/repo --session <session-key> \
-  --approval-id production-rollout \
-  --evidence 'release-record:2.4.0 smoke=passed'
+  --approval-id account-id-migration \
+  --evidence 'migration-record:account-id verification=passed'
 ```
 
 For rejection, record `--status rejected` without `--selected-option`, cancel the dependent TODOs, and do not perform the actions. Pending approvals and approved-but-incomplete agent actions block closure. Read the approval contract in [paperclip-project-boundary-standard.md](references/paperclip-project-boundary-standard.md) before requesting or resolving an approval.
@@ -138,7 +152,7 @@ python3 scripts/paperclip_session.py close \
   --session 20260715T103000Z-payment-timeout
 ```
 
-The close command blocks unresolved board approvals first, then verifies expected outputs, runs every declared command, generates `delivery.json`, enforces scope and leakage gates, and marks the session closed. It automatically deletes `retention: discard` sessions. For `external-archive`, pass `--archive-ref` during close and delete the closed local session with `paperclip_session.py purge` after confirming the external record.
+The close command blocks unresolved board approvals first, then verifies expected outputs, runs every declared command, generates `delivery.json`, checks scope and leakage, and marks the session closed. It automatically deletes `retention: discard` sessions. For `external-archive`, pass `--archive-ref` during close and delete the closed local session with `paperclip_session.py purge` after confirming the external record.
 
 Use close's repeatable `--integration-path`, or the checker's `--allow-path`, only for verified product-owned Paperclip integrations. Never allow an entire repository or a generic parent such as `src`, `docs`, or `tests`.
 

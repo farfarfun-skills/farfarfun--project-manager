@@ -632,7 +632,8 @@ def analyze(
         "manual_checks": [
             "Confirm that durable names describe stable domain concepts rather than a task title, even when similarity detection passes.",
             "Confirm that promoted documentation states project facts and cites a canonical project source, not Paperclip execution narration.",
-            "Confirm that every board-governed decision used a concrete approval and that the agent, not the board, performed post-approval API, upload, or execution work.",
+            "Confirm that routine recoverable operations executed directly and every actual decision gate used a supported core category plus a concrete Paperclip board approval.",
+            "Confirm that the board only approved or rejected in Paperclip and never manually authorized, granted access, supplied credentials, or performed operational work.",
         ],
     }
 

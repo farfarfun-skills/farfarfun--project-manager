@@ -96,7 +96,7 @@ session key 使用 UTC 时间戳和领域 slug：`YYYYMMDDTHHMMSSZ-{domain-slug}
 | `verification_commands` | 至少一条参数数组；不经过 shell 执行，不得在参数中放密钥。兼容旧数组；需要非根工作目录时使用 `{ "args": [...], "cwd": "apps/client" }`，`cwd` 必须是存在、非符号链接、仓库相对的具体目录 |
 | `baseline_head` | session 创建时的 HEAD |
 | `baseline_changes` | 创建前已有脏路径的状态和内容指纹 |
-| `overlapping_session_keys` | 创建时仍活跃的 peer session key 列表；用于并发归属、关闭与清理门禁，空列表也必须显式记录 |
+| `overlapping_session_keys` | 创建时仍活跃的 peer session key 列表；用于并发归属、关闭与清理校验，空列表也必须显式记录 |
 | `contract_digest` | 上述不可变契约及 session 状态的规范化摘要；不匹配时直接 block |
 
 旧版 v2 context 可能没有 `overlapping_session_keys`。工作阶段检查器将其标记为 `scope.contract_migration_required`，关闭阶段 block；不把缺失字段默认为可信的空列表，也不允许旧 session 为并发改动提供归属证据。使用 `paperclip_session.py migrate --workspace <workspace> --session <session-key>` 在 workspace lifecycle lock 内迁移：工具先把旧 `contract_digest` 保存到 session 的 `scratch/overlap-migration-backup.json`（不复制 task/agent 引用），再保守记录当前过程区内所有合法 peer session key，重算 digest，并原子替换 context。迁移后重新执行 hygiene 检查和原验证命令。
@@ -111,7 +111,7 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 
 ### 3.2 已提交路径归属证明
 
-共享提交在旧 session baseline 后混入其他 owner 的正式资产时，不得通过修改旧 session 的 `allowed_paths`、`forbidden_paths`、`baseline_head`、`baseline_changes` 或 `contract_digest` 消除门禁，也不得回退或覆盖项目资产。使用 `paperclip_session.py attest-commit` 在旧 session 根目录生成 `committed-path-ownership.json`。
+共享提交在旧 session baseline 后混入其他 owner 的正式资产时，不得通过修改旧 session 的 `allowed_paths`、`forbidden_paths`、`baseline_head`、`baseline_changes` 或 `contract_digest` 绕过范围校验，也不得回退或覆盖项目资产。使用 `paperclip_session.py attest-commit` 在旧 session 根目录生成 `committed-path-ownership.json`。
 
 每条证明必须绑定 source session 及其有效契约摘要、完整 commit OID 与 tree、具体路径、该路径在 commit 和当前 HEAD 的内容指纹、commit 后路径历史摘要、owner session、owner 的稳定 scope 摘要和证明生成时间。owner contract 必须拥有路径且不得将其列入自身 forbidden。旧无 session 证据的路径必须先创建仅声明精确路径且带真实验证命令的新 session，再以该 session 作为 owner；不得使用自由文本 owner、宽泛目录或手工摘要绕过 owner contract。
 
@@ -138,17 +138,31 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 
 ### 4.3 董事会审批
 
-以组织授权矩阵、公司章程或项目明确规则判断董事会是否有决策权；不得由 agent 擅自扩大董事会范围。若规则明确要求董事会参与，或重大事项的权限归属无法确认，agent 必须先停止依赖该决定的外部或变更操作，再提交具体审批。
+默认直接执行，不默认设门禁。调用已有 API、向既定位置上传产物、修改 allowed 范围内文件、运行命令、重试、通知以及具有已验证回滚方案的常规部署，若使用现有授权且影响有限、可恢复，均由 agent 直接完成并验证。task 中出现“审批”“授权”或 “gate” 字样本身不构成门禁理由。
 
-`board-approvals.json` 由 agent 通过 `paperclip_session.py` 管理。董事会不编辑该文件，也不调用 API、运行命令、上传文件、修改代码、部署、发布或采集证据。董事会只在 Paperclip 审批机制中批准一个明确选项或拒绝请求；审批结果返回后，agent 记录决议并自行完成全部操作。
+只有以下核心决定可以设置门禁：
+
+| `gate_category` | 门禁条件 |
+| --- | --- |
+| `board-mandated` | 授权矩阵、公司章程或有约束力的项目规则明确把该决定交给董事会 |
+| `material-commitment` | 决定形成重大的法律、财务或组织级战略承诺 |
+| `security-privacy` | 决定变更特权访问边界，或实质改变敏感数据的披露、保留或使用 |
+| `irreversible-production` | 生产操作具有重大影响且会破坏数据、服务或状态，无法安全回滚 |
+
+不属于以上类别时不得创建门禁，agent 直接执行。越界改动、敏感信息泄漏、损坏的 session、缺少输出或验证失败属于必须由 agent 修复的自动校验，不是董事会可批准绕过的决策门禁。
+
+凡实际设置了决策门禁的任务，都必须在 Paperclip 中形成具体董事会审批，不得再使用聊天确认、人工授权、权限交接或其他替代流程。agent 必须先停止依赖该决定的操作，再提交审批。
+
+`board-approvals.json` 由 agent 通过 `paperclip_session.py` 管理。董事会不编辑该文件，不手动授权或授予权限，也不提供凭据、调用 API、运行命令、上传文件、修改代码、部署、发布或采集证据。董事会只在 Paperclip 审批机制中批准一个明确选项或拒绝请求；审批结果返回后，agent 记录决议并自行完成全部操作。
 
 每项审批必须包含：
 
 | 字段 | 规则 |
 | --- | --- |
 | `id` | 当前 session 内唯一的稳定 kebab-case 决策标识 |
+| `gate_category` | 必须是四种核心门禁类别之一；普通操作不得伪装成核心门禁 |
 | `decision` | 董事会正在批准的单一、具体决定，不能写“请给意见” |
-| `rationale` | 为什么该决定属于董事会权限 |
+| `rationale` | 为什么该决定命中核心门禁并需要董事会审批 |
 | `options` | 有限且互斥的具体选项；不得把执行步骤包装成董事会任务 |
 | `recommended_option` | agent 基于现有证据推荐的一个已列选项 |
 | `impacts` | 每个决定涉及的业务、资金、法律、运营或风险影响 |
@@ -170,7 +184,7 @@ pending / execution blocked
 - `rejected`：agent 不执行相关动作，并把依赖 TODO 标记为 `cancelled:` 及原因。
 - `completed`：只能由 agent 在实际执行后登记，并提供最小可验证证据。
 
-不得用聊天中的模糊同意、文件上传、API 调用结果或 agent 自己的判断冒充董事会审批。不得要求董事会为了证明批准而执行操作。未决审批、无 Paperclip 审批引用的决议、批准后未完成的 agent 动作或损坏的审批账本均阻断关闭。
+不得用聊天中的模糊同意、手动授权、文件上传、API 调用结果或 agent 自己的判断冒充董事会审批。不得要求董事会为了证明批准而执行操作。未决审批、无 Paperclip 审批引用的决议、批准后未完成的 agent 动作或损坏的审批账本均阻断关闭。
 
 ### 4.4 截图与证据
 
@@ -196,7 +210,7 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 
 `paperclip_session.py close` 生成带摘要校验的 `delivery.json`，只记录变更路径、预期输出存在性、验证命令参数、退出状态、耗时和关闭结论，不保存命令输出、prompt 或推理内容。
 
-关闭门禁要求：全部董事会审批已解决，获批动作已由 agent 完成并记录证据；全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。
+关闭要求：只有核心决定形成董事会审批，且全部审批已解决，获批动作已由 agent 完成并记录证据；全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。自动校验失败必须修复，不得提交董事会放行。
 
 ## 5. 生命周期
 
@@ -211,18 +225,19 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 ### 执行
 
 1. 正式改动直接进入项目规范路径，只表达项目事实。
-2. 遇到董事会权限事项时，先登记具体审批并通过 Paperclip 提交；获批前不执行依赖动作。
-3. 董事会批准后由 agent 调用接口、上传文件、修改项目、部署并验证；拒绝后取消依赖动作。
-4. TODO、handoff、审批、截图、日志、探索笔记和临时输出留在 session。
-5. 从过程区提升内容时重新表述并重新验证，不复制过程元数据。
-6. 不在正式资产中建立到 session 的依赖或链接。
-7. 使用 `--scan changed` 检查当前 session；提交前使用 `--scan staged` 检查 index 内容。
+2. 对可恢复、影响有限的日常操作直接执行，不等待人工授权。
+3. 只有命中核心门禁类别时才登记具体审批并通过 Paperclip 提交；获批前不执行依赖动作。
+4. 董事会批准后由 agent 调用接口、上传文件、修改项目、部署并验证；拒绝后取消依赖动作。
+5. TODO、handoff、审批、截图、日志、探索笔记和临时输出留在 session。
+6. 从过程区提升内容时重新表述并重新验证，不复制过程元数据。
+7. 不在正式资产中建立到 session 的依赖或链接。
+8. 使用 `--scan changed` 检查当前 session；提交前使用 `--scan staged` 检查 index 内容。
 
 ### 收尾
 
 1. 检查文件名、代码标识符、文档内容、分支/提交信息和 diff。
 2. 确认董事会审批均已解决，获批动作均由 agent 完成，再完成或明确取消全部 TODO 并补齐必要证据索引。
-3. 使用 `paperclip_session.py close` 执行输出、验证、范围和泄漏门禁并生成 `delivery.json`。
+3. 使用 `paperclip_session.py close` 执行输出、验证、范围和泄漏自动校验并生成 `delivery.json`。
 4. `discard` 在成功关闭后自动删除；`external-archive` 提供授权归档引用后关闭，再使用 `purge` 删除本地 session。
 5. 关闭失败时修复问题并重试；不得用 `purge --force` 冒充成功交付。
 6. 删除后再次检查 Git 状态，确保没有过程文件被跟踪或遗留在正式目录。
