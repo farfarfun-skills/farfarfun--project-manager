@@ -634,6 +634,7 @@ def analyze(
             "Confirm that promoted documentation states project facts and cites a canonical project source, not Paperclip execution narration.",
             "Confirm that routine recoverable operations executed directly and every actual decision gate used a supported core category plus a concrete Paperclip board approval.",
             "Confirm that the board only approved or rejected in Paperclip and never manually authorized, granted access, supplied credentials, or performed operational work.",
+            "Confirm that no task, approval, command, or changed path modifies or controls the Paperclip service, deployment, configuration, or running process.",
         ],
     }
 

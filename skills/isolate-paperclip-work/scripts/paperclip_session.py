@@ -32,6 +32,25 @@ CORE_GATE_CATEGORIES = (
     "material-commitment",
     "security-privacy",
 )
+PAPERCLIP_SERVICE_TARGET_RE = re.compile(
+    r"(?:\bpaperclip(?:[-_/\.\s]+(?:service|server|daemon|control[-_/\.\s]+plane|installation|"
+    r"deployment|runtime|configuration|config|admin[-_/\.\s]+(?:api|endpoint))|\s+itself)\b|"
+    r"\b(?:service|server|daemon)[-_/\.\s]+paperclip\b)",
+    re.IGNORECASE,
+)
+PAPERCLIP_SERVICE_MUTATION_RE = re.compile(
+    r"\b(?:apply|change|configure|delete|deploy|disable|down|edit|enable|install|kill|mask|"
+    r"modify|patch|reconfigure|reload|remove|replace|restart|scale|shutdown|stop|suspend|"
+    r"terminate|uninstall|unmask|update|upgrade)\w*\b",
+    re.IGNORECASE,
+)
+PAPERCLIP_SERVICE_MANAGER_RE = re.compile(
+    r"\b(?:docker(?:\s+compose)?|killall|kubectl|pkill|pm2|podman(?:\s+compose)?|service|"
+    r"supervisorctl|systemctl)\b(?=.{0,160}\bpaperclip(?:\.service)?\b)"
+    r"(?=.{0,160}\b(?:apply|delete|disable|down|edit|enable|kill|mask|patch|reload|remove|"
+    r"restart|scale|start|stop|unmask|upgrade)\b)",
+    re.IGNORECASE,
+)
 SESSION_DIRECTORIES = ("notes", "screens", "logs", "scratch")
 BROAD_CONTRACT_PATHS = {".", "*", "**", "./**"}
 CONTRACT_FIELDS = (
@@ -87,6 +106,25 @@ def normalize_verification_cwd(value: str) -> str:
     return normalize_contract_path(value, "verification command cwd", allow_globs=False)
 
 
+def contains_paperclip_service_mutation(value: str) -> bool:
+    normalized = " ".join(value.split())
+    return bool(
+        PAPERCLIP_SERVICE_MANAGER_RE.search(normalized)
+        or (
+            PAPERCLIP_SERVICE_TARGET_RE.search(normalized)
+            and PAPERCLIP_SERVICE_MUTATION_RE.search(normalized)
+        )
+    )
+
+
+def assert_no_paperclip_service_mutation(values: list[str], field: str) -> None:
+    if any(contains_paperclip_service_mutation(value) for value in values):
+        raise ValueError(
+            f"{field} must not modify or control the Paperclip service; "
+            "this platform boundary cannot be approved or bypassed"
+        )
+
+
 def validate_verification_commands(commands: list) -> list:
     normalized = []
     for command in commands:
@@ -101,6 +139,7 @@ def validate_verification_commands(commands: list) -> list:
             raise ValueError("verification commands must be argument arrays or args/cwd objects")
         if not isinstance(args, list) or not args or not all(isinstance(part, str) and part for part in args):
             raise ValueError("verification commands must be non-empty argument arrays")
+        assert_no_paperclip_service_mutation([" ".join(args)], "verification commands")
         normalized.append(command)
     if not normalized:
         raise ValueError("at least one verification command is required")
@@ -1286,6 +1325,20 @@ def validate_board_approvals(ledger: object) -> dict:
                 isinstance(value, str) and value.strip() for value in values
             ):
                 raise ValueError(f"{prefix}.{field} must contain concrete non-empty items")
+        service_texts = [
+            approval["id"],
+            approval["decision"],
+            approval["rationale"],
+            *(value for option in options for value in (option["id"], option["label"])),
+            *approval["impacts"],
+            *approval["agent_actions"],
+        ]
+        service_texts.extend(
+            approval[field]
+            for field in ("resolution_note", "execution_evidence")
+            if isinstance(approval[field], str)
+        )
+        assert_no_paperclip_service_mutation(service_texts, prefix)
 
         status = approval["approval_status"]
         execution = approval["execution_status"]
@@ -2039,7 +2092,12 @@ def main() -> int:
     request_approval.add_argument("--option", action="append", required=True, type=parse_approval_option, help="id=label; repeatable")
     request_approval.add_argument("--recommended-option", required=True)
     request_approval.add_argument("--impact", action="append", required=True, help="Concrete impact; repeatable")
-    request_approval.add_argument("--agent-action", action="append", required=True, help="Action the agent performs after approval; repeatable")
+    request_approval.add_argument(
+        "--agent-action",
+        action="append",
+        required=True,
+        help="Agent action after approval; Paperclip service control is forbidden; repeatable",
+    )
 
     resolve_approval = subparsers.add_parser("resolve-approval", help="Record a board decision returned by Paperclip")
     resolve_approval.add_argument("--workspace", required=True)

@@ -1,6 +1,6 @@
 ---
 name: isolate-paperclip-work
-description: Keep Paperclip execution context separate from durable project assets, execute routine reversible operations without approval, route only core decision gates through concrete Paperclip board approvals, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, gate, or board decision, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
+description: Keep Paperclip execution context separate from durable project assets, keep the Paperclip service immutable and running, execute routine reversible operations without approval, route only core decision gates through concrete Paperclip board approvals, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, gate, board decision, or request to modify or control Paperclip itself, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
 ---
 
 # Isolate Paperclip Work
@@ -22,6 +22,14 @@ Classify every artifact before writing it:
 Do not put Paperclip task titles, task IDs, task URLs, agent names or IDs, prompts, assignment state, retry history, or run status in project documentation, source code, tests, configuration, migrations, assets, release notes, branches, or code identifiers. Do not name any durable file, directory, symbol, module, test, or migration after a task title or task reference.
 
 Rewrite requirements received through a task as tool-neutral domain statements. Name artifacts after the capability, behavior, or decision they own. A matching phrase is not automatically acceptable merely because it appeared in the task.
+
+## Protect The Paperclip Service
+
+Treat the Paperclip service, control plane, installation, source, configuration, deployment, and running process as immutable platform infrastructure. Never modify, patch, upgrade, deploy, reconfigure, replace, stop, restart, kill, disable, suspend, or uninstall them. Do not call a Paperclip administrative endpoint that performs any of those actions.
+
+This boundary applies to every task and cannot become a board gate or approval option. If the workspace or requested paths are the Paperclip service itself, refuse that part before creating a session or changing files. If a task mixes prohibited service work with independent project work, omit the prohibited actions and continue only with the separable project work.
+
+Normal use of supported Paperclip task, assignment, handoff, status, and approval APIs is allowed. These operations use the service; they do not modify or control the service itself.
 
 ## Prepare Local Process Space
 
@@ -64,7 +72,7 @@ Create a decision gate only for one of these core categories:
 | `security-privacy` | The decision changes privileged access or materially changes sensitive-data disclosure, retention, or use |
 | `irreversible-production` | The production action is destructive or not safely reversible and has a material blast radius |
 
-If none applies, do not gate: the agent performs and verifies the operation. Scope violations, credential exposure, invalid process state, missing outputs, and failed verification are invariant failures that the agent must repair; they are not decisions the board can approve away.
+If none applies, do not gate: the agent performs and verifies the operation. Scope violations, credential exposure, invalid process state, missing outputs, failed verification, and any attempt to modify or control the Paperclip service are invariant failures; they are not decisions the board can approve away.
 
 Every task that genuinely needs a decision gate must use a concrete Paperclip board approval. Do not use chat confirmation, a manual authorization step, a permission handoff, or any other substitute. Stop before the dependent action and create the approval:
 
@@ -83,7 +91,7 @@ python3 scripts/paperclip_session.py request-approval \
   --agent-action 'Agent applies the selected option, verifies the result, and records evidence'
 ```
 
-Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option there. Never ask the board to authorize manually, grant access, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, or collect evidence.
+Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option there. Never ask the board to authorize manually, grant access, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, collect evidence, or approve changes to the Paperclip service.
 
 After Paperclip returns the board decision, the agent records it. For approval, the agent then performs every declared action and records completion evidence:
 
@@ -139,7 +147,7 @@ Do not treat a Paperclip task or prompt as the project's source of truth. Link t
 4. Cite project-owned evidence, not `.run/paperclip/` paths.
 5. Keep the original process artifact local until cleanup; do not move it into `docs/` or source directories.
 
-If the product intentionally integrates with Paperclip, state that boundary explicitly and keep current task/run metadata isolated. An integration exception permits product behavior such as a Paperclip client or API contract; it does not permit leaking the agent's current assignment into those assets.
+If the product intentionally integrates with Paperclip, state that boundary explicitly and keep current task/run metadata isolated. An integration exception permits product behavior such as a Paperclip client or API contract; it does not permit leaking the agent's current assignment or changing the Paperclip service, configuration, deployment, or running process.
 
 ## Close And Audit
 

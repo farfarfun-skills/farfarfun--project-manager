@@ -101,6 +101,30 @@ class PaperclipSessionTests(unittest.TestCase):
             self.assertIn("/.run/paperclip/", (workspace / ".gitignore").read_text(encoding="utf-8"))
             self.assertEqual("allow", analyze(workspace, selected_session=session.name)["decision"])
 
+    def test_session_rejects_paperclip_service_control_but_allows_normal_cli_use(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            normal_command = [sys.executable, str(SESSION_SCRIPT), "close"]
+
+            self.assertEqual(
+                [normal_command],
+                paperclip_session.validate_verification_commands([normal_command]),
+            )
+            self.assertFalse(
+                paperclip_session.contains_paperclip_service_mutation(
+                    "Agent stops an obsolete Paperclip task."
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "must not modify or control"):
+                create_session(
+                    workspace,
+                    "service-check",
+                    ["docs/service-check.md"],
+                    [["systemctl", "stop", "paperclip.service"]],
+                    started_at=FIXED_TIME,
+                )
+
     def test_board_approval_blocks_close_until_agent_executes_approved_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -250,6 +274,55 @@ class PaperclipSessionTests(unittest.TestCase):
                     ["Agent uploads and verifies the artifact."],
                     requested_at=FIXED_TIME,
                 )
+
+    def test_board_approval_cannot_authorize_paperclip_service_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+
+            with self.assertRaisesRegex(ValueError, "platform boundary cannot be approved"):
+                request_board_approval(
+                    workspace,
+                    session.name,
+                    "platform-restart",
+                    "board-mandated",
+                    "Whether to restart the Paperclip service",
+                    "The task requests a Paperclip service restart.",
+                    [{"id": "proceed", "label": "Restart the Paperclip service"}],
+                    "proceed",
+                    ["Paperclip service availability will be interrupted."],
+                    ["Agent restarts the Paperclip service."],
+                    requested_at=FIXED_TIME,
+                )
+
+    def test_tampered_approval_ledger_cannot_add_paperclip_service_control(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+            request_board_approval(
+                workspace,
+                session.name,
+                "account-id-migration",
+                "irreversible-production",
+                "Whether to run a one-way production migration",
+                "The production migration has no safe rollback.",
+                [{"id": "proceed", "label": "Run the migration"}],
+                "proceed",
+                ["Production identifiers change permanently."],
+                ["Agent runs and verifies the migration."],
+                requested_at=FIXED_TIME,
+            )
+            approval_path = session / "board-approvals.json"
+            ledger = json.loads(approval_path.read_text(encoding="utf-8"))
+            ledger["approvals"][0]["agent_actions"] = ["Agent stops the Paperclip service."]
+            approval_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+            report = analyze(workspace, selected_session=session.name)
+
+            self.assertEqual("block", report["decision"])
+            self.assertIn("board_approval.invalid", {item["code"] for item in report["findings"]})
 
     def test_legacy_board_approval_is_loaded_as_board_mandated_core_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

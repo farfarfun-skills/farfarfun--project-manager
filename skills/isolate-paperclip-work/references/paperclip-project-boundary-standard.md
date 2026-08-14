@@ -55,6 +55,14 @@ Paperclip task 和 prompt 不得成为项目唯一事实来源。产品要求必
 
 Git 提交信息仅允许一项平台级归属例外：独立一行且完整等于 `Co-Authored-By: Paperclip <noreply@paperclip.ing>` 的 trailer。隔离审计在检查提交 subject/body 时只剔除此精确行；大小写、空白、邮箱、键名或附加文本不同的近似值，以及其余任何 Paperclip 文本，仍按 `git.paperclip_context.commit` 阻断。该例外不允许 task、agent、run、prompt、指派或其他执行上下文进入提交信息，也不构成路径级放行。
 
+### 2.4 Paperclip 服务不可变边界
+
+Paperclip 服务、控制面、安装、服务源码、配置、部署清单和运行进程属于不可变平台基础设施。任何 task、agent 或董事会审批都不得修改、补丁、升级、部署、重配、替换、停止、重启、终止、禁用、暂停或卸载这些对象，也不得调用执行上述行为的 Paperclip 管理接口。
+
+该限制不是决策门禁，不能提交董事会批准或通过人工授权绕过。若 workspace 本身是 Paperclip 服务仓库，或请求路径属于其服务源码、配置或部署，agent 必须在创建 session 和修改文件前拒绝该部分。若任务还包含可独立完成的项目工作，只执行可分离且不触碰 Paperclip 服务的部分。
+
+通过受支持的 Paperclip task、assignment、handoff、status 和 approval API 进行日常工作属于正常使用，不视为修改服务本身。
+
 ## 3. 本地过程区
 
 唯一默认过程根目录为：
@@ -93,7 +101,7 @@ session key 使用 UTC 时间戳和领域 slug：`YYYYMMDDTHHMMSSZ-{domain-slug}
 | `allowed_paths` | agent 可以修改的最小相对路径或 glob；不得使用 `.`、`*` 或 `**` 放行全仓 |
 | `forbidden_paths` | 即使属于 allowed 父目录也禁止修改的路径；优先级高于 allowed |
 | `expected_outputs` | 关闭时必须存在的具体项目路径，不接受 glob |
-| `verification_commands` | 至少一条参数数组；不经过 shell 执行，不得在参数中放密钥。兼容旧数组；需要非根工作目录时使用 `{ "args": [...], "cwd": "apps/client" }`，`cwd` 必须是存在、非符号链接、仓库相对的具体目录 |
+| `verification_commands` | 至少一条参数数组；不经过 shell 执行，不得在参数中放密钥，也不得修改或控制 Paperclip 服务。兼容旧数组；需要非根工作目录时使用 `{ "args": [...], "cwd": "apps/client" }`，`cwd` 必须是存在、非符号链接、仓库相对的具体目录 |
 | `baseline_head` | session 创建时的 HEAD |
 | `baseline_changes` | 创建前已有脏路径的状态和内容指纹 |
 | `overlapping_session_keys` | 创建时仍活跃的 peer session key 列表；用于并发归属、关闭与清理校验，空列表也必须显式记录 |
@@ -166,7 +174,7 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 | `options` | 有限且互斥的具体选项；不得把执行步骤包装成董事会任务 |
 | `recommended_option` | agent 基于现有证据推荐的一个已列选项 |
 | `impacts` | 每个决定涉及的业务、资金、法律、运营或风险影响 |
-| `agent_actions` | 获批后由 agent 执行的 API、上传、文件、部署、通知或验证动作；存在多个选项时必须覆盖每个选项的对应动作 |
+| `agent_actions` | 获批后由 agent 执行的 API、上传、文件、部署、通知或验证动作；不得包含 Paperclip 服务修改或生命周期控制；存在多个选项时必须覆盖每个选项的对应动作 |
 | `approval_ref` | Paperclip 返回的不透明审批引用，不保存 token 或认证信息 |
 | `execution_evidence` | agent 完成获批动作后的项目记录或可重复验证引用 |
 
@@ -217,10 +225,11 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 ### 开始
 
 1. 读取仓库结构、命名和贡献规范。
-2. 从需求中确定领域能力名称，不复用 task 标题作为文件或代码名。
-3. 确定最小 allowed/forbidden 路径、预期输出和验证命令。
-4. 在修改项目文件前创建 session 并记录 Git baseline。
-5. 确认 `.run/paperclip/` 已忽略且没有被 Git 跟踪。
+2. 确认 workspace、请求路径和操作不修改或控制 Paperclip 服务；命中时拒绝该部分，且不得提交董事会审批。
+3. 从需求中确定领域能力名称，不复用 task 标题作为文件或代码名。
+4. 确定最小 allowed/forbidden 路径、预期输出和验证命令。
+5. 在修改项目文件前创建 session 并记录 Git baseline。
+6. 确认 `.run/paperclip/` 已忽略且没有被 Git 跟踪。
 
 ### 执行
 
@@ -248,6 +257,6 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 | --- | --- |
 | `allow` | 范围、输出和验证契约满足；正式资产无 Paperclip 执行上下文；过程区隔离、忽略且结构合规 |
 | `revise` | task 标题相似命名、过程区结构、截图索引、TODO 或其他可修复收尾问题 |
-| `block` | 未决董事会审批、获批后 agent 动作未完成、审批账本损坏、越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
+| `block` | Paperclip 服务修改或生命周期控制、未决董事会审批、获批后 agent 动作未完成、审批账本损坏、越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
 
 自动检查不能判断一个看似正常的领域名是否实际由 task 标题机械转写。最终交付前必须人工回答：即使删除 Paperclip 中的 task，这个名称和文档是否仍然是项目自然、长期可维护的一部分？
