@@ -1,6 +1,6 @@
 ---
 name: isolate-paperclip-work
-description: Keep Paperclip execution context separate from durable project assets, keep the Paperclip service immutable and running, execute routine reversible operations without approval, route only core decision gates through concrete Paperclip board approvals, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, gate, board decision, or request to modify or control Paperclip itself, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
+description: Keep Paperclip execution context separate from durable project assets, keep the Paperclip service immutable and running, execute routine reversible operations without approval, route core decision gates and new agent permissions through auditable Paperclip board approval cards, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, permission request, gate, board decision, or request to modify or control Paperclip itself, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
 ---
 
 # Isolate Paperclip Work
@@ -67,14 +67,15 @@ Create a decision gate only for one of these core categories:
 
 | Category | Use only when |
 | --- | --- |
+| `agent-permission` | An agent needs a permission it does not already hold; the card states the resource, least-privilege scope, purpose, and expiry or revocation condition |
 | `board-mandated` | The authority matrix or binding project policy explicitly assigns the decision to the board |
 | `material-commitment` | The decision creates a material legal, financial, or organization-wide strategic commitment |
 | `security-privacy` | The decision changes privileged access or materially changes sensitive-data disclosure, retention, or use |
 | `irreversible-production` | The production action is destructive or not safely reversible and has a material blast radius |
 
-If none applies, do not gate: the agent performs and verifies the operation. Scope violations, credential exposure, invalid process state, missing outputs, failed verification, and any attempt to modify or control the Paperclip service are invariant failures; they are not decisions the board can approve away.
+If none applies, do not gate: the agent performs and verifies the operation. Never treat missing agent permission as ordinary execution or ask for it in chat; create an `agent-permission` card before the dependent action. Scope violations, credential exposure, invalid process state, missing outputs, failed verification, and any attempt to modify or control the Paperclip service are invariant failures; they are not decisions the board can approve away.
 
-Every task that genuinely needs a decision gate must use a concrete Paperclip board approval. Do not use chat confirmation, a manual authorization step, a permission handoff, or any other substitute. Stop before the dependent action and create the approval:
+Every operation that genuinely needs a decision gate must create its own auditable Paperclip board approval card. Do not combine unrelated decisions in one card or use chat confirmation, a manual authorization step, a permission handoff, or any other substitute. Stop before the dependent action and create the card:
 
 ```bash
 python3 scripts/paperclip_session.py request-approval \
@@ -91,9 +92,11 @@ python3 scripts/paperclip_session.py request-approval \
   --agent-action 'Agent applies the selected option, verifies the result, and records evidence'
 ```
 
-Submit the returned request through Paperclip's approval mechanism. The board only approves or rejects a listed option there. Never ask the board to authorize manually, grant access, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, collect evidence, or approve changes to the Paperclip service.
+Submit the returned card through Paperclip's approval mechanism. The board only approves or rejects a listed option there. For an `agent-permission` card, approval authorizes only its stated least-privilege scope and lifetime; the existing access-control workflow applies or revokes it and records evidence. Never ask the board to configure access manually, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, collect evidence, or approve changes to the Paperclip service.
 
-After Paperclip returns the board decision, the agent records it. For approval, the agent then performs every declared action and records completion evidence:
+For `--gate-category agent-permission`, the session must have an opaque `--agent-ref`, and `request-approval` also requires `--permission-scope` plus `--permission-lifetime`.
+
+After Paperclip returns the board decision, the agent records it. For approval, the declared executor performs every card action and the agent records completion evidence:
 
 ```bash
 python3 scripts/paperclip_session.py resolve-approval \
@@ -109,7 +112,7 @@ python3 scripts/paperclip_session.py complete-approval \
   --evidence 'migration-record:account-id verification=passed'
 ```
 
-For rejection, record `--status rejected` without `--selected-option`, cancel the dependent TODOs, and do not perform the actions. Pending approvals and approved-but-incomplete agent actions block closure. Read the approval contract in [paperclip-project-boundary-standard.md](references/paperclip-project-boundary-standard.md) before requesting or resolving an approval.
+The request, Paperclip approval reference, selected option, timestamps, execution status, and evidence remain on the same digest-protected card. For rejection, record `--status rejected` without `--selected-option`, cancel the dependent TODOs, and do not perform the actions. Pending approvals, altered cards, and approved-but-incomplete actions block closure. Read the approval contract in [paperclip-project-boundary-standard.md](references/paperclip-project-boundary-standard.md) before requesting or resolving an approval.
 
 During work, attribute the Git diff to the current session and pass task identity only at runtime:
 

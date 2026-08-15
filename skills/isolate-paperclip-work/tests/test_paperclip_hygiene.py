@@ -93,7 +93,8 @@ class PaperclipSessionTests(unittest.TestCase):
             context = json.loads((session / "context.json").read_text(encoding="utf-8"))
             self.assertEqual(2, context["schema_version"])
             approvals = json.loads((session / "board-approvals.json").read_text(encoding="utf-8"))
-            self.assertEqual(2, approvals["schema_version"])
+            self.assertEqual(3, approvals["schema_version"])
+            self.assertIn("ledger_digest", approvals)
             self.assertEqual(["src/payment/**", "docs/payment-timeout.md"], context["allowed_paths"])
             self.assertEqual(PASS_COMMAND, context["verification_commands"])
             self.assertIn("baseline_head", context)
@@ -149,6 +150,7 @@ class PaperclipSessionTests(unittest.TestCase):
                 requested_at=FIXED_TIME,
             )
             self.assertEqual("blocked", request["execution_status"])
+            self.assertEqual("board-approval-card", request["record_type"])
 
             pending = close_session(workspace, session.name)
             self.assertFalse(pending["closed"])
@@ -186,6 +188,11 @@ class PaperclipSessionTests(unittest.TestCase):
                 closed["delivery"]["board_approvals"][0]["gate_category"],
             )
             self.assertEqual("completed", closed["delivery"]["board_approvals"][0]["execution_status"])
+            self.assertEqual(
+                "Whether to run a one-way account ID migration in production",
+                closed["delivery"]["board_approvals"][0]["decision"],
+            )
+            self.assertIn("board_approval_ledger_digest", closed["delivery"])
 
     def test_rejected_board_approval_requires_no_board_operation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -249,9 +256,10 @@ class PaperclipSessionTests(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             self.assertEqual("pending", payload["approval"]["approval_status"])
+            self.assertEqual("board-approval-card", payload["approval"]["record_type"])
             self.assertEqual("irreversible-production", payload["approval"]["gate_category"])
             self.assertIn("board_action", payload)
-            self.assertIn("agent performs every operational action", payload["board_action"])
+            self.assertIn("follow-up and evidence stay on the card", payload["board_action"])
             self.assertIn("routine operations execute directly", payload["gate_policy"])
 
     def test_board_approval_rejects_non_core_gate_category(self) -> None:
@@ -324,6 +332,83 @@ class PaperclipSessionTests(unittest.TestCase):
             self.assertEqual("block", report["decision"])
             self.assertIn("board_approval.invalid", {item["code"] for item in report["findings"]})
 
+    def test_new_agent_permission_requires_an_auditable_card(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+
+            card = request_board_approval(
+                workspace,
+                session.name,
+                "production-read-access",
+                "agent-permission",
+                "Whether agent-7 may read production payment metrics for one hour",
+                "The current assignment lacks the required read permission.",
+                [
+                    {"id": "grant-read", "label": "Grant one-hour read access"},
+                    {"id": "deny", "label": "Keep current access"},
+                ],
+                "deny",
+                ["Scope: production payment metrics; expires after one hour."],
+                ["Access control grants the selected scope; the agent records use and revocation evidence."],
+                requested_at=FIXED_TIME,
+                permission_scope="read production payment metrics",
+                permission_lifetime="one hour, then revoke automatically",
+            )
+
+            self.assertEqual("agent-permission", card["gate_category"])
+            self.assertEqual("board-approval-card", card["record_type"])
+            self.assertEqual("agent-7", card["requester_ref"])
+            ledger = json.loads((session / "board-approvals.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                ledger["ledger_digest"],
+                paperclip_session.board_approval_ledger_digest(ledger),
+            )
+
+            with self.assertRaisesRegex(ValueError, "require requester_ref, permission_scope"):
+                request_board_approval(
+                    workspace,
+                    session.name,
+                    "unscoped-production-access",
+                    "agent-permission",
+                    "Whether agent-7 may access production",
+                    "The current assignment lacks production access.",
+                    [{"id": "grant", "label": "Grant access"}],
+                    "grant",
+                    ["Production access changes."],
+                    ["Access control applies the approved permission."],
+                    requested_at=FIXED_TIME,
+                )
+
+    def test_tampered_board_approval_card_fails_digest_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            initialize_repository(workspace)
+            session = self.make_session(workspace)
+            request_board_approval(
+                workspace,
+                session.name,
+                "account-id-migration",
+                "irreversible-production",
+                "Whether to run a one-way production migration",
+                "The production migration has no safe rollback.",
+                [{"id": "proceed", "label": "Run the migration"}],
+                "proceed",
+                ["Production identifiers change permanently."],
+                ["Agent runs and verifies the migration."],
+                requested_at=FIXED_TIME,
+            )
+            approval_path = session / "board-approvals.json"
+            ledger = json.loads(approval_path.read_text(encoding="utf-8"))
+            ledger["approvals"][0]["decision"] = "Altered after submission"
+            approval_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+            report = analyze(workspace, selected_session=session.name)
+
+            self.assertEqual("block", report["decision"])
+            self.assertIn("digest does not match", report["findings"][0]["message"])
+
     def test_legacy_board_approval_is_loaded_as_board_mandated_core_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -346,12 +431,18 @@ class PaperclipSessionTests(unittest.TestCase):
             legacy = json.loads(approval_path.read_text(encoding="utf-8"))
             legacy["schema_version"] = 1
             legacy["approvals"][0].pop("gate_category")
+            legacy["approvals"][0].pop("record_type")
+            legacy["approvals"][0].pop("requester_ref")
+            legacy["approvals"][0].pop("permission_scope")
+            legacy["approvals"][0].pop("permission_lifetime")
+            legacy.pop("ledger_digest")
             approval_path.write_text(json.dumps(legacy), encoding="utf-8")
 
             migrated = paperclip_session.load_board_approvals(session)
 
-            self.assertEqual(2, migrated["schema_version"])
+            self.assertEqual(3, migrated["schema_version"])
             self.assertEqual("board-mandated", migrated["approvals"][0]["gate_category"])
+            self.assertEqual("board-approval-card", migrated["approvals"][0]["record_type"])
 
     def test_legacy_v2_context_requires_migration_and_supports_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

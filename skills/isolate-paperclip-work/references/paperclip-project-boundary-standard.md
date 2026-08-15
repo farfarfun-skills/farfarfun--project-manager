@@ -76,7 +76,7 @@ Paperclip 服务、控制面、安装、服务源码、配置、部署清单和�
         ├── todo.md
         ├── handoff.md
         ├── evidence.md
-        ├── board-approvals.json # agent 管理的董事会审批账本
+        ├── board-approvals.json # agent 管理的可审计董事会审批卡账本
         ├── delivery.json       # close 时生成
         ├── notes/
         ├── screens/
@@ -144,7 +144,7 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 
 不得复制完整 prompt、密钥、认证头、个人数据或大段日志。正式交付文档不得链接 `handoff.md`。
 
-### 4.3 董事会审批
+### 4.3 董事会审批卡
 
 默认直接执行，不默认设门禁。调用已有 API、向既定位置上传产物、修改 allowed 范围内文件、运行命令、重试、通知以及具有已验证回滚方案的常规部署，若使用现有授权且影响有限、可恢复，均由 agent 直接完成并验证。task 中出现“审批”“授权”或 “gate” 字样本身不构成门禁理由。
 
@@ -152,31 +152,38 @@ task 标题只通过 `PAPERCLIP_TASK_TITLE` 或检查器参数在运行时参与
 
 | `gate_category` | 门禁条件 |
 | --- | --- |
+| `agent-permission` | agent 需要申请当前未持有的新权限；审批卡必须写明资源对象、最小权限范围、用途和有效期或撤销条件 |
 | `board-mandated` | 授权矩阵、公司章程或有约束力的项目规则明确把该决定交给董事会 |
 | `material-commitment` | 决定形成重大的法律、财务或组织级战略承诺 |
 | `security-privacy` | 决定变更特权访问边界，或实质改变敏感数据的披露、保留或使用 |
 | `irreversible-production` | 生产操作具有重大影响且会破坏数据、服务或状态，无法安全回滚 |
 
-不属于以上类别时不得创建门禁，agent 直接执行。越界改动、敏感信息泄漏、损坏的 session、缺少输出或验证失败属于必须由 agent 修复的自动校验，不是董事会可批准绕过的决策门禁。
+不属于以上类别时不得创建门禁，agent 直接执行。agent 一旦需要当前未持有的新权限，必须先创建 `agent-permission` 审批卡，不得在聊天中口头申请或先执行后补审批。越界改动、敏感信息泄漏、损坏的 session、缺少输出或验证失败属于必须由 agent 修复的自动校验，不是董事会可批准绕过的决策门禁。
 
-凡实际设置了决策门禁的任务，都必须在 Paperclip 中形成具体董事会审批，不得再使用聊天确认、人工授权、权限交接或其他替代流程。agent 必须先停止依赖该决定的操作，再提交审批。
+凡实际需要决策门禁的操作，都必须在 Paperclip 中形成一张独立、可审计的董事会审批卡，不得把无关决定合并到一张卡，也不得使用聊天确认、人工授权、权限交接或其他替代流程。agent 必须先停止依赖该决定的操作，再提交审批卡。
 
-`board-approvals.json` 由 agent 通过 `paperclip_session.py` 管理。董事会不编辑该文件，不手动授权或授予权限，也不提供凭据、调用 API、运行命令、上传文件、修改代码、部署、发布或采集证据。董事会只在 Paperclip 审批机制中批准一个明确选项或拒绝请求；审批结果返回后，agent 记录决议并自行完成全部操作。
+`board-approvals.json` 由 agent 通过 `paperclip_session.py` 管理，每条记录都是 `record_type: board-approval-card` 的审批卡。账本摘要覆盖全部卡片；卡片被工具外修改后，审计与关闭必须阻断。董事会不编辑该文件，不手动配置权限，也不提供凭据、调用 API、运行命令、上传文件、修改代码、部署、发布或采集证据。董事会只在 Paperclip 审批机制中批准一个明确选项或拒绝请求；权限卡获批后由既有访问控制流程按卡片限定的范围和时效配置或撤销权限，其他审批结果返回后由 agent 记录决议并完成后续操作。
 
 每项审批必须包含：
 
 | 字段 | 规则 |
 | --- | --- |
+| `record_type` | 固定为 `board-approval-card` |
 | `id` | 当前 session 内唯一的稳定 kebab-case 决策标识 |
-| `gate_category` | 必须是四种核心门禁类别之一；普通操作不得伪装成核心门禁 |
+| `gate_category` | 必须是五种核心门禁类别之一；普通操作不得伪装成核心门禁 |
+| `requester_ref` | 权限申请必须从 session 记录申请 agent 的不透明引用 |
+| `permission_scope` | `agent-permission` 必须写明资源和最小权限范围；其他卡片为 `null` |
+| `permission_lifetime` | `agent-permission` 必须写明到期时间或撤销条件；其他卡片为 `null` |
 | `decision` | 董事会正在批准的单一、具体决定，不能写“请给意见” |
 | `rationale` | 为什么该决定命中核心门禁并需要董事会审批 |
 | `options` | 有限且互斥的具体选项；不得把执行步骤包装成董事会任务 |
 | `recommended_option` | agent 基于现有证据推荐的一个已列选项 |
 | `impacts` | 每个决定涉及的业务、资金、法律、运营或风险影响 |
-| `agent_actions` | 获批后由 agent 执行的 API、上传、文件、部署、通知或验证动作；不得包含 Paperclip 服务修改或生命周期控制；存在多个选项时必须覆盖每个选项的对应动作 |
+| `agent_actions` | 获批后的 API、上传、文件、部署、通知或验证动作；权限卡同时记录既有访问控制流程的配置或撤销动作；不得包含 Paperclip 服务修改或生命周期控制 |
 | `approval_ref` | Paperclip 返回的不透明审批引用，不保存 token 或认证信息 |
 | `execution_evidence` | agent 完成获批动作后的项目记录或可重复验证引用 |
+
+审批卡账本还必须包含 `ledger_digest`。关闭生成的 `delivery.json` 保留完整审批卡及该摘要，使请求、决议和后续执行证据可以作为一个整体复核。
 
 审批状态机固定为：
 
@@ -188,11 +195,11 @@ pending / execution blocked
 ```
 
 - `pending`：不得执行任何依赖该决定的动作。
-- `approved`：董事会职责已经结束；agent 按 `selected_option` 执行全部 `agent_actions`。
+- `approved`：董事会职责已经结束；agent 或既有访问控制流程按 `selected_option` 执行全部 `agent_actions`。
 - `rejected`：agent 不执行相关动作，并把依赖 TODO 标记为 `cancelled:` 及原因。
 - `completed`：只能由 agent 在实际执行后登记，并提供最小可验证证据。
 
-不得用聊天中的模糊同意、手动授权、文件上传、API 调用结果或 agent 自己的判断冒充董事会审批。不得要求董事会为了证明批准而执行操作。未决审批、无 Paperclip 审批引用的决议、批准后未完成的 agent 动作或损坏的审批账本均阻断关闭。
+不得用聊天中的模糊同意、手动授权、文件上传、API 调用结果或 agent 自己的判断冒充董事会审批。不得要求董事会为了证明批准而执行操作。未决审批、无 Paperclip 审批引用的决议、批准后未完成的 agent 动作、摘要不匹配或损坏的审批卡账本均阻断关闭。
 
 ### 4.4 截图与证据
 
@@ -218,7 +225,7 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 
 `paperclip_session.py close` 生成带摘要校验的 `delivery.json`，只记录变更路径、预期输出存在性、验证命令参数、退出状态、耗时和关闭结论，不保存命令输出、prompt 或推理内容。
 
-关闭要求：只有核心决定形成董事会审批，且全部审批已解决，获批动作已由 agent 完成并记录证据；全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。自动校验失败必须修复，不得提交董事会放行。
+关闭要求：核心决定和 agent 新权限申请已形成董事会审批卡，且全部审批已解决，获批动作已完成并记录证据；全部 TODO 已完成或明确取消；预期输出存在；所有验证命令成功；Git 变更未超出 allowed 且未命中 forbidden；正式资产无 task/agent/run 泄漏；截图、凭据和命名检查通过。自动校验失败必须修复，不得提交董事会放行。
 
 ## 5. 生命周期
 
@@ -235,7 +242,7 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 
 1. 正式改动直接进入项目规范路径，只表达项目事实。
 2. 对可恢复、影响有限的日常操作直接执行，不等待人工授权。
-3. 只有命中核心门禁类别时才登记具体审批并通过 Paperclip 提交；获批前不执行依赖动作。
+3. 命中核心门禁或需要 agent 新权限时，登记审批卡并通过 Paperclip 提交；获批前不执行依赖动作。
 4. 董事会批准后由 agent 调用接口、上传文件、修改项目、部署并验证；拒绝后取消依赖动作。
 5. TODO、handoff、审批、截图、日志、探索笔记和临时输出留在 session。
 6. 从过程区提升内容时重新表述并重新验证，不复制过程元数据。
@@ -257,6 +264,6 @@ NNN-{before|after|error|verification}-{surface-slug}.{png|jpg|jpeg|webp}
 | --- | --- |
 | `allow` | 范围、输出和验证契约满足；正式资产无 Paperclip 执行上下文；过程区隔离、忽略且结构合规 |
 | `revise` | task 标题相似命名、过程区结构、截图索引、TODO 或其他可修复收尾问题 |
-| `block` | Paperclip 服务修改或生命周期控制、未决董事会审批、获批后 agent 动作未完成、审批账本损坏、越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
+| `block` | Paperclip 服务修改或生命周期控制、未决董事会审批、获批后 agent 动作未完成、审批卡账本损坏、越界/禁区改动、输出或验证失败、task/agent/run 泄漏、过程区被跟踪、敏感信息，或正式实现依赖过程区 |
 
 自动检查不能判断一个看似正常的领域名是否实际由 task 标题机械转写。最终交付前必须人工回答：即使删除 Paperclip 中的 task，这个名称和文档是否仍然是项目自然、长期可维护的一部分？

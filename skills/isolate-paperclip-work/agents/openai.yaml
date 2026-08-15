@@ -1,4 +1,4 @@
 interface:
   display_name: "Paperclip Project Hygiene"
-  short_description: "Keep Paperclip running and approve only core gates"
-  default_prompt: "Use $isolate-paperclip-work to keep the Paperclip service immutable and running, execute routine recoverable work directly, route only core decision gates through board approval, and verify delivery."
+  short_description: "Audit core gates and agent permission approvals"
+  default_prompt: "Use $isolate-paperclip-work to keep the Paperclip service immutable and running, execute routine recoverable work directly, route core decision gates and new agent permissions through auditable board approval cards, and verify delivery."

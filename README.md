@@ -8,7 +8,7 @@
 | --- | --- |
 | [`project-manager`](skills/project-manager/SKILL.md) | 检查 PRD、设计、技术方案、测试、发布和复盘产物，聚合生命周期门禁 |
 | [`project-structure-governance`](skills/project-structure-governance/SKILL.md) | 初始化并审计仓库目录、应用边界、文件命名和项目文档布局 |
-| [`isolate-paperclip-work`](skills/isolate-paperclip-work/SKILL.md) | 隔离 Paperclip 上下文，保护服务本身不被修改或停止，仅将核心门禁交由董事会审批 |
+| [`isolate-paperclip-work`](skills/isolate-paperclip-work/SKILL.md) | 隔离 Paperclip 上下文，保护服务本身不被修改或停止，将核心门禁和 Agent 新权限申请形成可审计的董事会审批卡 |
 | [`service-release-governance`](skills/service-release-governance/SKILL.md) | 约束服务通过正式包发布、仓库安装和生产启动 |
 | [`bash-service-guide`](skills/bash-service-guide/SKILL.md) | 统一 Bash 服务生命周期脚本及开发、生产运行边界 |
 

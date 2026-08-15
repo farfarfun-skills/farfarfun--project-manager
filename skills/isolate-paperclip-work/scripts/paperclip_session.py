@@ -25,8 +25,10 @@ LEGACY_CONTEXT_BACKUP = "overlap-migration-backup.json"
 VERIFICATION_CWD_MIGRATION_BACKUP = "verification-cwd-migration-backup.json"
 COMMITTED_OWNERSHIP_FILE = "committed-path-ownership.json"
 BOARD_APPROVALS_FILE = "board-approvals.json"
-BOARD_APPROVAL_SCHEMA_VERSION = 2
+BOARD_APPROVAL_SCHEMA_VERSION = 3
+BOARD_APPROVAL_RECORD_TYPE = "board-approval-card"
 CORE_GATE_CATEGORIES = (
+    "agent-permission",
     "board-mandated",
     "irreversible-production",
     "material-commitment",
@@ -166,6 +168,12 @@ def delivery_digest(delivery: dict) -> str:
 def delivery_digest_is_valid(delivery: dict) -> bool:
     expected = delivery.get("delivery_digest")
     return isinstance(expected, str) and expected == delivery_digest(delivery)
+
+
+def board_approval_ledger_digest(ledger: dict) -> str:
+    payload = {key: value for key, value in ledger.items() if key != "ledger_digest"}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def committed_ownership_digest(manifest: dict) -> str:
@@ -1189,13 +1197,9 @@ def _create_session_unlocked(
         "| --- | --- | --- | --- |\n",
         encoding="utf-8",
     )
-    (session / BOARD_APPROVALS_FILE).write_text(
-        json.dumps(
-            {"schema_version": BOARD_APPROVAL_SCHEMA_VERSION, "approvals": []},
-            ensure_ascii=False,
-            indent=2,
-        ) + "\n",
-        encoding="utf-8",
+    write_board_approvals(
+        session / BOARD_APPROVALS_FILE,
+        {"schema_version": BOARD_APPROVAL_SCHEMA_VERSION, "approvals": []},
     )
     return session
 
@@ -1263,14 +1267,21 @@ def write_context(path: Path, context: dict) -> None:
 
 
 def validate_board_approvals(ledger: object) -> dict:
-    if not isinstance(ledger, dict) or set(ledger) != {"schema_version", "approvals"}:
-        raise ValueError("board approval ledger requires exactly schema_version and approvals")
-    schema_version = ledger["schema_version"]
+    if not isinstance(ledger, dict):
+        raise ValueError("board approval ledger must be an object")
+    schema_version = ledger.get("schema_version")
+    if schema_version not in (1, 2, BOARD_APPROVAL_SCHEMA_VERSION) or not isinstance(ledger.get("approvals"), list):
+        raise ValueError("board approval ledger must use schema version 1, 2, or 3 and an approvals array")
+    expected_fields = {"schema_version", "approvals"}
+    if schema_version == BOARD_APPROVAL_SCHEMA_VERSION:
+        expected_fields.add("ledger_digest")
+    if set(ledger) != expected_fields:
+        raise ValueError("board approval ledger has an invalid field set")
     if (
-        schema_version not in (1, BOARD_APPROVAL_SCHEMA_VERSION)
-        or not isinstance(ledger["approvals"], list)
+        schema_version == BOARD_APPROVAL_SCHEMA_VERSION
+        and ledger["ledger_digest"] != board_approval_ledger_digest(ledger)
     ):
-        raise ValueError("board approval ledger must use schema version 1 or 2 and an approvals array")
+        raise ValueError("board approval ledger digest does not match")
 
     fields = {
         "id", "decision", "rationale", "options", "recommended_option", "impacts",
@@ -1278,8 +1289,10 @@ def validate_board_approvals(ledger: object) -> dict:
         "selected_option", "resolved_at", "resolution_note", "execution_status",
         "executed_at", "execution_evidence",
     }
-    if schema_version == BOARD_APPROVAL_SCHEMA_VERSION:
+    if schema_version >= 2:
         fields.add("gate_category")
+    if schema_version == BOARD_APPROVAL_SCHEMA_VERSION:
+        fields.update({"record_type", "requester_ref", "permission_scope", "permission_lifetime"})
     seen_ids: set[str] = set()
     for index, approval in enumerate(ledger["approvals"]):
         prefix = f"approvals[{index}]"
@@ -1291,14 +1304,33 @@ def validate_board_approvals(ledger: object) -> dict:
         if approval_id in seen_ids:
             raise ValueError(f"duplicate board approval id: {approval_id}")
         seen_ids.add(approval_id)
+        if (
+            schema_version == BOARD_APPROVAL_SCHEMA_VERSION
+            and approval["record_type"] != BOARD_APPROVAL_RECORD_TYPE
+        ):
+            raise ValueError(f"{prefix}.record_type must identify a board approval card")
         for field in ("decision", "rationale", "requested_at"):
             if not isinstance(approval[field], str) or not approval[field].strip():
                 raise ValueError(f"{prefix}.{field} must be a non-empty string")
         if (
-            schema_version == BOARD_APPROVAL_SCHEMA_VERSION
+            schema_version >= 2
             and approval["gate_category"] not in CORE_GATE_CATEGORIES
         ):
             raise ValueError(f"{prefix}.gate_category must identify a core gate")
+        if schema_version == BOARD_APPROVAL_SCHEMA_VERSION:
+            requester_ref = approval["requester_ref"]
+            if requester_ref is not None and (not isinstance(requester_ref, str) or not requester_ref.strip()):
+                raise ValueError(f"{prefix}.requester_ref must be a non-empty string or null")
+            permission_fields = (approval["permission_scope"], approval["permission_lifetime"])
+            if approval["gate_category"] == "agent-permission":
+                if not isinstance(requester_ref, str) or not all(
+                    isinstance(value, str) and value.strip() for value in permission_fields
+                ):
+                    raise ValueError(
+                        f"{prefix} agent-permission cards require requester_ref, permission_scope, and permission_lifetime"
+                    )
+            elif any(value is not None for value in permission_fields):
+                raise ValueError(f"{prefix} permission fields are reserved for agent-permission cards")
 
         options = approval["options"]
         if not isinstance(options, list) or not options:
@@ -1338,6 +1370,12 @@ def validate_board_approvals(ledger: object) -> dict:
             for field in ("resolution_note", "execution_evidence")
             if isinstance(approval[field], str)
         )
+        if schema_version == BOARD_APPROVAL_SCHEMA_VERSION:
+            service_texts.extend(
+                approval[field]
+                for field in ("permission_scope", "permission_lifetime")
+                if isinstance(approval[field], str)
+            )
         assert_no_paperclip_service_mutation(service_texts, prefix)
 
         status = approval["approval_status"]
@@ -1378,26 +1416,43 @@ def validate_board_approvals(ledger: object) -> dict:
             raise ValueError(f"{prefix}.approval_status is invalid")
         if approval["resolution_note"] is not None and not isinstance(approval["resolution_note"], str):
             raise ValueError(f"{prefix}.resolution_note must be a string or null")
-    if schema_version == 1:
-        return {
+    if schema_version < BOARD_APPROVAL_SCHEMA_VERSION:
+        upgraded = {
             "schema_version": BOARD_APPROVAL_SCHEMA_VERSION,
             "approvals": [
-                {**approval, "gate_category": "board-mandated"}
+                {
+                    **approval,
+                    **({"gate_category": "board-mandated"} if schema_version == 1 else {}),
+                    "record_type": BOARD_APPROVAL_RECORD_TYPE,
+                    "requester_ref": None,
+                    "permission_scope": None,
+                    "permission_lifetime": None,
+                }
                 for approval in ledger["approvals"]
             ],
         }
+        upgraded["ledger_digest"] = board_approval_ledger_digest(upgraded)
+        return upgraded
     return ledger
 
 
 def load_board_approvals(session: Path) -> dict:
     path = session / BOARD_APPROVALS_FILE
     if not path.exists():
-        return {"schema_version": BOARD_APPROVAL_SCHEMA_VERSION, "approvals": []}
+        ledger = {"schema_version": BOARD_APPROVAL_SCHEMA_VERSION, "approvals": []}
+        ledger["ledger_digest"] = board_approval_ledger_digest(ledger)
+        return ledger
     try:
         ledger = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"unable to read board approval ledger: {exc}") from exc
     return validate_board_approvals(ledger)
+
+
+def write_board_approvals(path: Path, ledger: dict) -> None:
+    ledger["ledger_digest"] = board_approval_ledger_digest(ledger)
+    validate_board_approvals(ledger)
+    write_context(path, ledger)
 
 
 def board_approval_findings(workspace: Path, session: Path, phase: str) -> list[dict[str, str]]:
@@ -1456,6 +1511,8 @@ def request_board_approval(
     impacts: list[str],
     agent_actions: list[str],
     requested_at: datetime | None = None,
+    permission_scope: str | None = None,
+    permission_lifetime: str | None = None,
 ) -> dict:
     if gate_category not in CORE_GATE_CATEGORIES:
         raise ValueError("board approval is reserved for a supported core gate category")
@@ -1465,7 +1522,11 @@ def request_board_approval(
         ledger = load_board_approvals(session)
         approval = {
             "id": approval_id,
+            "record_type": BOARD_APPROVAL_RECORD_TYPE,
+            "requester_ref": load_context(session).get("agent_ref"),
             "gate_category": gate_category,
+            "permission_scope": permission_scope.strip() if permission_scope else None,
+            "permission_lifetime": permission_lifetime.strip() if permission_lifetime else None,
             "decision": decision.strip(),
             "rationale": rationale.strip(),
             "options": options,
@@ -1483,8 +1544,7 @@ def request_board_approval(
             "execution_evidence": None,
         }
         ledger["approvals"].append(approval)
-        validate_board_approvals(ledger)
-        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        write_board_approvals(session / BOARD_APPROVALS_FILE, ledger)
         return approval
 
 
@@ -1523,8 +1583,7 @@ def resolve_board_approval(
             "resolution_note": resolution_note.strip() if resolution_note else None,
             "execution_status": "pending" if status == "approved" else "not-required",
         })
-        validate_board_approvals(ledger)
-        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        write_board_approvals(session / BOARD_APPROVALS_FILE, ledger)
         return approval
 
 
@@ -1551,8 +1610,7 @@ def complete_board_approval_action(
             "executed_at": normalize_time(executed_at).isoformat().replace("+00:00", "Z"),
             "execution_evidence": evidence.strip(),
         })
-        validate_board_approvals(ledger)
-        write_context(session / BOARD_APPROVALS_FILE, ledger)
+        write_board_approvals(session / BOARD_APPROVALS_FILE, ledger)
         return approval
 
 
@@ -1917,18 +1975,8 @@ def _close_session_unlocked(
         "changed_paths": effective_changed_paths(workspace, context, session_key),
         "expected_outputs": output_results,
         "verification": verification,
-        "board_approvals": [
-            {
-                "id": approval["id"],
-                "gate_category": approval["gate_category"],
-                "approval_status": approval["approval_status"],
-                "approval_ref": approval["approval_ref"],
-                "selected_option": approval["selected_option"],
-                "execution_status": approval["execution_status"],
-                "execution_evidence": approval["execution_evidence"],
-            }
-            for approval in approval_ledger["approvals"]
-        ],
+        "board_approvals": approval_ledger["approvals"],
+        "board_approval_ledger_digest": approval_ledger["ledger_digest"],
     }
     delivery["owned_path_fingerprints"] = {
         relative: fingerprint_workspace_path(workspace, relative)
@@ -2073,7 +2121,7 @@ def main() -> int:
     create.add_argument("--retention", choices=["discard", "external-archive"], default="discard")
     create.add_argument("--at", type=parse_time, help="Optional ISO-8601 start time; defaults to current UTC")
 
-    request_approval = subparsers.add_parser("request-approval", help="Create a concrete board approval request")
+    request_approval = subparsers.add_parser("request-approval", help="Create an auditable board approval card")
     request_approval.add_argument("--workspace", required=True)
     request_approval.add_argument("--session", required=True)
     request_approval.add_argument("--approval-id", required=True, help="Stable kebab-case decision id")
@@ -2098,6 +2146,8 @@ def main() -> int:
         required=True,
         help="Agent action after approval; Paperclip service control is forbidden; repeatable",
     )
+    request_approval.add_argument("--permission-scope", help="Required for agent-permission: exact least-privilege resource scope")
+    request_approval.add_argument("--permission-lifetime", help="Required for agent-permission: expiry or revocation condition")
 
     resolve_approval = subparsers.add_parser("resolve-approval", help="Record a board decision returned by Paperclip")
     resolve_approval.add_argument("--workspace", required=True)
@@ -2178,11 +2228,13 @@ def main() -> int:
                 Path(args.workspace), args.session, args.approval_id,
                 args.gate_category, args.decision, args.rationale, args.option,
                 args.recommended_option, args.impact, args.agent_action,
+                permission_scope=args.permission_scope,
+                permission_lifetime=args.permission_lifetime,
             )
             print(json.dumps({
                 "approval": approval,
-                "board_action": "Approve or reject one listed option in Paperclip only; the agent performs every operational action after approval.",
-                "gate_policy": "Only core gates use board approval; routine operations execute directly without manual authorization.",
+                "board_action": "Approve or reject one listed option in Paperclip only; operational follow-up and evidence stay on the card.",
+                "gate_policy": "Core gates and new agent permissions use auditable board approval cards; routine operations execute directly.",
             }, ensure_ascii=False, indent=2))
             return 0
         if args.command == "resolve-approval":
