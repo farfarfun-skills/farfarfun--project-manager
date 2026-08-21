@@ -1,6 +1,6 @@
 ---
 name: paperclip-task-coordinator
-description: Coordinate periodic Paperclip heartbeats by fetching unfinished tasks, reconciling dependencies and execution state, waking executable assignees, and recording bounded inspection results. Use for an assigned Paperclip coordination heartbeat or recovery sweep; do not use to execute another role's domain work.
+description: Coordinate periodic Paperclip heartbeats by fetching unfinished tasks, generating deterministic task and agent workload reports, reconciling dependencies and execution state, and waking executable assignees. Use for an assigned Paperclip coordination heartbeat or recovery sweep; do not use to execute another role's domain work.
 ---
 
 # Paperclip Task Coordinator
@@ -10,13 +10,13 @@ description: Coordinate periodic Paperclip heartbeats by fetching unfinished tas
 ## 执行顺序
 
 1. 先处理 wake payload 明确唤醒的工作，读取 heartbeat context、增量评论、`blockedByIssueIds` 和 execution path。若 harness 已完成 scoped checkout，不要重复 checkout。
-2. 拉取最新的全部非终态任务，至少覆盖 `todo`、`in_progress`、`in_review` 和 `blocked`，并将所有挂在董事会的未完成任务纳入本轮有界巡检。读取操作不等于认领或执行其他角色的业务工作。
+2. 运行 `inspection_tasks.py report --format json` 拉取最新的全部非终态任务，使用脚本返回的 `taskDimension` 和 `agentDimension` 作为固定快照。所有挂在董事会的未完成任务都纳入本轮有界巡检；读取操作不等于认领或执行其他角色的业务工作。
 3. 为每项任务核验 assignee、最近活动、依赖和真实存活路径。存活路径只能是 active run、queued continuation、assignee checkout、真实 reviewer/approval/interaction/monitor，或已安排的 recovery。
 4. 先纠正错误阻塞和状态不一致，再清理已完成依赖，然后处理无阻塞但闲置的关键任务、长期停滞和不可用环境影响，最后整理低风险信息。
 5. 从本 Skill 根目录运行 `inspection_tasks.py ensure`，由脚本解析或创建唯一的月度容器和 canonical 日任务。把 JSON 输出中的 `monthlyTaskId`、`dailyTaskId` 和 `reportTaskId` 作为本轮固定值；禁止自行调用 issue 列表或创建接口实现同一逻辑。
-6. 从未完成依赖构建有向图，优先处理没有未解决 blocker 的叶子任务。依赖图和 Top 20 规则也按定期巡查协议执行。
-7. 按定期巡查协议分析 blocked Top 10 并分流，再对满足拉起条件的任务调用官方 `POST /api/agents/{agentId}/heartbeat/invoke`。记录请求和回读结果，不轮询 agent、session、进程或子任务。
-8. 结束前回读所有被修改任务及 canonical 日任务，只向 `reportTaskId` 写入巡查汇总、依赖图和最终状态，并汇总恢复、唤起、依赖清理、取消、阻塞和升级数量。没有动作也要记录原因。
+6. 直接使用 `taskDimension.dependencyEdges`、`taskDimension.leafTop20` 和 `taskDimension.blockedTop10`，不得让 AI 重建依赖图、重算下游数量或重新选择排行。优先处理没有未解决 blocker 的叶子任务。
+7. 按定期巡查协议分析脚本选出的 blocked Top 10 并分流，再对满足拉起条件的任务调用官方 `POST /api/agents/{agentId}/heartbeat/invoke`。记录请求和回读结果，不轮询 agent、session、进程或子任务。
+8. 结束前回读所有被修改任务及 canonical 日任务，重新运行 `report --format json`。只向 `reportTaskId` 原样写入脚本返回的 `markdown`，随后追加 AI 编写的“任务分析”、已核验处置和最终状态；不得自行重算、排序或改写任务与 Agent 表格。没有动作也要记录原因。
 
 ## 巡查写入保护
 
@@ -36,7 +36,18 @@ python3 scripts/inspection_tasks.py ensure \
 
 参数也可由脚本帮助中列出的 `PAPERCLIP_*` 环境变量提供。脚本使用公司级全状态查询和同机互斥锁；同一 heartbeat 不得绕过脚本再次搜索或创建日/月任务。
 
-每次写入巡查汇总、依赖图、叶子表或最终状态前，必须重新 GET 目标并同时断言：
+固定巡查报表也只能由该脚本生成：
+
+```bash
+python3 scripts/inspection_tasks.py report \
+  --base-url <paperclip-api-url> \
+  --company-id <company-id> \
+  --format json
+```
+
+该命令只读，不需要 run ID 或 goal ID。JSON 同时返回任务维度、Agent 维度和可直接写入日任务的 `markdown`。AI 只分析脚本列出的任务及其后续回读证据，不自行维护第二套统计。
+
+每次写入固定巡查报表、任务分析、依赖图或最终状态前，必须重新 GET 目标并同时断言：
 
 - `targetId == reportTaskId == dailyTaskId`
 - `targetId != monthlyTaskId`
@@ -45,7 +56,7 @@ python3 scripts/inspection_tasks.py ensure \
 
 任一断言失败时停止该写请求，重新解析 canonical 日任务；不得回退到 wake issue、当前 issue 或月度容器。当前 wake issue 是月任务时，月任务只是触发源，不是报告目标。
 
-在发出巡查评论、附件、叶子表或最终状态请求前，用脚本校验目标：
+在发出巡查评论、附件或最终状态请求前，用脚本校验目标：
 
 ```bash
 python3 scripts/inspection_tasks.py guard-target \

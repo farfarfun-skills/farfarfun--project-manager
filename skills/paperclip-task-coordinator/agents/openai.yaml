@@ -1,4 +1,4 @@
 interface:
   display_name: "Paperclip Task Coordinator"
-  short_description: "Coordinate heartbeat task recovery and wake-ups"
-  default_prompt: "Use $paperclip-task-coordinator to inspect unfinished work, reconcile task states, and wake the next executable tasks."
+  short_description: "Report task and agent workload, then coordinate"
+  default_prompt: "Use $paperclip-task-coordinator to render deterministic task and agent workload reports, analyze unfinished work, and wake executable tasks."

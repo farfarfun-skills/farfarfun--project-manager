@@ -1,13 +1,15 @@
 import sys
 import unittest
-from datetime import date
+from contextlib import redirect_stdout
+from datetime import date, datetime, timezone
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from inspection_tasks import PaperclipClient, complete_day, ensure_tasks, guard_target
+from inspection_tasks import PaperclipClient, build_inspection_report, complete_day, ensure_tasks, guard_target, main
 
 
 class FakeClient:
@@ -116,6 +118,39 @@ class InspectionTaskTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "canonical daily task"):
             guard_target(client, "C-1", "G-1", date(2026, 8, 21), "M-1")
+
+    def test_report_ranks_agents_and_renders_both_dimensions(self):
+        issues = [
+            {"id": "I-1", "identifier": "APP-1", "title": "实现登录 <script>", "status": "todo", "assigneeAgentId": "A-1", "assigneeAgentName": "前端"},
+            {"id": "I-2", "identifier": "APP-2", "title": "修复登录", "status": "blocked", "assigneeAgentId": "A-1", "assigneeAgentName": "前端", "blockedByIssueIds": ["I-3"]},
+            {"id": "I-3", "identifier": "APP-3", "title": "接口测试", "status": "in_progress", "assigneeAgentId": "A-2", "assigneeAgent": {"name": "测试"}},
+            {"id": "I-4", "identifier": "APP-4", "title": "待分配", "status": "todo"},
+            {"id": "I-5", "identifier": "APP-5", "title": "已完成", "status": "done", "assigneeAgentId": "A-2"},
+            daily(),
+        ]
+
+        report = build_inspection_report(issues, datetime(2026, 8, 21, 8, tzinfo=timezone.utc))
+
+        self.assertEqual(4, report["taskDimension"]["total"])
+        self.assertEqual("A-1", report["agentDimension"]["topAgent"]["id"])
+        self.assertEqual(2, report["agentDimension"]["topAgent"]["total"])
+        self.assertEqual(["A-1", "A-2", None], [item["id"] for item in report["agentDimension"]["agents"]])
+        self.assertEqual("I-3", report["taskDimension"]["leafTop20"][0]["id"])
+        self.assertEqual(1, report["taskDimension"]["leafTop20"][0]["downstreamCount"])
+        self.assertEqual("I-2", report["taskDimension"]["blockedTop10"][0]["id"])
+        self.assertIn("## 任务维度", report["markdown"])
+        self.assertIn("## Agent 维度", report["markdown"])
+        self.assertIn("未完成任务最多：前端 (`A-1`)，2 项", report["markdown"])
+        self.assertIn("实现登录 &lt;script&gt;", report["markdown"])
+
+    def test_report_cli_is_read_only_and_needs_no_goal_or_run_id(self):
+        output = StringIO()
+        argv = ["inspection_tasks.py", "report", "--base-url", "https://paperclip.example", "--company-id", "C-1", "--format", "markdown"]
+        with patch.object(sys, "argv", argv), patch.object(PaperclipClient, "list_issues", return_value=[]), redirect_stdout(output):
+            self.assertEqual(0, main())
+
+        self.assertIn("## 任务维度", output.getvalue())
+        self.assertIn("## Agent 维度", output.getvalue())
 
 
 if __name__ == "__main__":
