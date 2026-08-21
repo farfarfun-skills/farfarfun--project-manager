@@ -24,6 +24,8 @@ description: Coordinate periodic Paperclip heartbeats by fetching unfinished tas
 
 日/月任务的查找、创建、去重选择、历史日任务完成和月任务状态修正只能通过脚本执行：
 
+canonical 日任务的 owner 固定为当前公司的 CTO Agent。`--cto-agent-id` 必须传真实 CTO Agent ID，不得传任务协调员、wake issue assignee 或占位值；无法确认 CTO Agent ID 时停止创建日任务并报告配置 blocker。脚本会把既有 canonical 日任务的错误 owner 修复为 CTO 并回读验证。
+
 ```bash
 python3 scripts/inspection_tasks.py ensure \
   --base-url <paperclip-api-url> \

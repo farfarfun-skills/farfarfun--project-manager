@@ -71,12 +71,15 @@ class InspectionTaskTests(unittest.TestCase):
         self.assertIn("status=", url)
         self.assertNotIn("assigneeAgentId", url)
 
-    def test_ensure_reuses_cto_owned_daily_task(self):
-        client = FakeClient([month(), daily()])
+    def test_ensure_reuses_daily_task_and_assigns_it_to_cto(self):
+        existing = daily()
+        existing["assigneeAgentId"] = "OTHER"
+        client = FakeClient([month(), existing])
 
         result = ensure_tasks(client, "C-1", "G-1", "COORD", "CTO", date(2026, 8, 21))
 
         self.assertEqual("D-1", result["reportTaskId"])
+        self.assertEqual("CTO", client.get_issue("D-1")["assigneeAgentId"])
         self.assertEqual([], client.created)
 
     def test_ensure_creates_each_task_once_and_completes_month(self):

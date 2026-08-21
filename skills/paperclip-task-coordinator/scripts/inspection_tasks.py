@@ -505,7 +505,7 @@ def main() -> int:
     ensure = subparsers.add_parser("ensure", help="Get or create canonical monthly and daily tasks")
     add_connection_arguments(ensure)
     ensure.add_argument("--coordinator-agent-id", default=env("PAPERCLIP_AGENT_ID"))
-    ensure.add_argument("--cto-agent-id", default=env("PAPERCLIP_CTO_AGENT_ID"))
+    ensure.add_argument("--cto-agent-id", default=env("PAPERCLIP_CTO_AGENT_ID"), help="Current company CTO agent ID; canonical daily tasks are always assigned to it")
 
     complete = subparsers.add_parser("complete-day", help="Mark the canonical daily task done")
     add_connection_arguments(complete)
