@@ -1,4 +1,4 @@
 interface:
   display_name: "Paperclip Project Hygiene"
-  short_description: "Audit core gates and agent permission approvals"
-  default_prompt: "Use $isolate-paperclip-work to keep the Paperclip service immutable and running, execute routine recoverable work directly, route core decision gates and new agent permissions through auditable board approval cards, and verify delivery."
+  short_description: "Keep Paperclip collaboration local and isolated"
+  default_prompt: "Use $isolate-paperclip-work to complete and verify collaborative engineering locally without public-network, cloud-device, release, deployment, or GitHub work."

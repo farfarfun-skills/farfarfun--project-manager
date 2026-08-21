@@ -1,11 +1,19 @@
 ---
 name: isolate-paperclip-work
-description: Keep Paperclip execution context separate from durable project assets, keep the Paperclip service immutable and running, execute routine reversible operations without approval, route core decision gates and new agent permissions through auditable Paperclip board approval cards, and enforce Git scope, naming, verification, delivery evidence, and cleanup. Use whenever an agent works on a software project inside Paperclip, declares change scope, encounters an approval, authorization, permission request, gate, board decision, or request to modify or control Paperclip itself, creates process artifacts, scans changes, closes a run, or audits Paperclip-to-project coupling.
+description: Keep Paperclip software collaboration local and separate from durable project assets, excluding public-network, cloud-device, release, deployment, and GitHub work while enforcing local Git scope, naming, verification, delivery evidence, cleanup, and auditable decision gates. Use whenever an agent develops or verifies a software project inside Paperclip, creates process artifacts, closes a run, or audits Paperclip-to-project coupling.
 ---
 
 # Isolate Paperclip Work
 
 Treat Paperclip as an execution environment, not as part of the project's domain. Preserve durable product and engineering knowledge; isolate how Paperclip assigned and executed the work.
+
+## Keep Collaboration Local
+
+This boundary takes precedence over later execution and approval guidance. Complete collaborative engineering through repository-local implementation, tests, fixtures, mocks, local builds, and local emulators only.
+
+Do not plan, request, provision, execute, or make completion depend on public IPs, internet-facing environments, cloud real-device services, remote hardware, releases, deployments, or GitHub operations such as issues, pull requests, Actions, releases, and pushes. Local Git inspection and scope auditing remain required; they are not GitHub operations.
+
+When a task mentions an excluded external resource or operation, narrow the work to a locally reproducible path, substitute a fixture, mock, or local emulator where useful, and record that external validation was not performed. Do not create a blocker, permission request, or board gate merely to obtain an excluded resource. Never claim remote, device-cloud, release, or production verification from local evidence.
 
 ## Establish The Boundary
 
@@ -61,7 +69,7 @@ Keep all execution-only material inside the current session:
 
 ## Minimize And Route Decision Gates
 
-Default to execution. Do not create a gate merely because a task mentions approval or authorization, or because the agent must call an API, upload an artifact, edit an allowed file, run a command, retry work, or perform a routine deployment with a tested rollback. Execute these operations directly when they are within task scope, use existing authorized access, and have limited, recoverable impact.
+Default to execution. Do not create a gate merely because a task mentions approval or authorization, or because the agent must call a local API, generate an artifact, edit an allowed file, run a local command, or retry local work. Execute these operations directly when they are within task scope and have limited, recoverable impact. Excluded external operations remain out of scope and cannot be reintroduced through a gate.
 
 Create a decision gate only for one of these core categories:
 
@@ -81,18 +89,18 @@ Every operation that genuinely needs a decision gate must create its own auditab
 python3 scripts/paperclip_session.py request-approval \
   --workspace /path/to/repo \
   --session 20260715T103000Z-payment-timeout \
-  --approval-id account-id-migration \
-  --gate-category irreversible-production \
-  --decision 'Whether to run the one-way account ID migration in production' \
-  --rationale 'The migration rewrites production identifiers and has no safe rollback' \
-  --option 'proceed=Run the migration' \
-  --option 'defer=Keep the current identifiers' \
-  --recommended-option defer \
-  --impact 'Proceed permanently rewrites production account identifiers' \
-  --agent-action 'Agent applies the selected option, verifies the result, and records evidence'
+  --approval-id cancellation-window \
+  --gate-category board-mandated \
+  --decision 'Whether cancellation remains available for 24 or 48 hours' \
+  --rationale 'Project policy assigns this business rule to the board' \
+  --option '24-hours=Allow cancellation for 24 hours' \
+  --option '48-hours=Allow cancellation for 48 hours' \
+  --recommended-option 24-hours \
+  --impact 'The selected window changes checkout behavior and tests' \
+  --agent-action 'Agent implements the selected rule locally and runs its tests'
 ```
 
-Submit the returned card through Paperclip's approval mechanism. The board only approves or rejects a listed option there. For an `agent-permission` card, approval authorizes only its stated least-privilege scope and lifetime; the existing access-control workflow applies or revokes it and records evidence. Never ask the board to configure access manually, provide credentials, call an API, run a command, upload a file, edit the repository, deploy a release, collect evidence, or approve changes to the Paperclip service.
+Submit the returned card through Paperclip's approval mechanism. The board only approves or rejects a listed option there. For an `agent-permission` card, approval authorizes only its stated least-privilege scope and lifetime; the existing access-control workflow applies or revokes it and records evidence. Never ask the board to configure access manually, provide credentials, call an API, run a command, upload a file, edit the repository, perform an excluded external operation, collect evidence, or approve changes to the Paperclip service.
 
 For `--gate-category agent-permission`, the session must have an opaque `--agent-ref`, and `request-approval` also requires `--permission-scope` plus `--permission-lifetime`.
 
@@ -101,15 +109,15 @@ After Paperclip returns the board decision, the agent records it. For approval, 
 ```bash
 python3 scripts/paperclip_session.py resolve-approval \
   --workspace /path/to/repo --session <session-key> \
-  --approval-id account-id-migration --status approved \
-  --selected-option proceed --approval-ref '<opaque-approval-ref>'
+  --approval-id cancellation-window --status approved \
+  --selected-option 24-hours --approval-ref '<opaque-approval-ref>'
 
-# Agent performs the approved API, upload, deployment, or repository work here.
+# Agent implements and verifies the approved rule locally here.
 
 python3 scripts/paperclip_session.py complete-approval \
   --workspace /path/to/repo --session <session-key> \
-  --approval-id account-id-migration \
-  --evidence 'migration-record:account-id verification=passed'
+  --approval-id cancellation-window \
+  --evidence 'tests/cancellation-window verification=passed'
 ```
 
 The request, Paperclip approval reference, selected option, timestamps, execution status, and evidence remain on the same digest-protected card. For rejection, record `--status rejected` without `--selected-option`, cancel the dependent TODOs, and do not perform the actions. Pending approvals, altered cards, and approved-but-incomplete actions block closure. Read the approval contract in [paperclip-project-boundary-standard.md](references/paperclip-project-boundary-standard.md) before requesting or resolving an approval.

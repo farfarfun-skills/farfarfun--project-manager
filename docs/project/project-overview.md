@@ -28,6 +28,7 @@
 
 - Codex Skill 指令、参考规范、模板、检查器和自动化测试。
 - PRD、设计、开发、测试、发布、复盘和仓库结构治理。
+- 定期巡检未完成任务、校正状态和依赖，并拉起具备合法执行路径的任务。
 - Paperclip 执行隔离、服务不可变、低风险操作直行、核心门禁与 Agent 新权限申请的可审计董事会审批卡，以及生产服务发布和 Bash 生命周期约束。
 
 ### 范围外
@@ -56,6 +57,7 @@
 - 生命周期治理：`skills/project-manager/SKILL.md`
 - 仓库结构治理：`skills/project-structure-governance/SKILL.md`
 - Agent 工作隔离：`skills/isolate-paperclip-work/SKILL.md`
+- 任务协调心跳：`skills/paperclip-task-coordinator/SKILL.md`
 
 ## 更新记录
 
